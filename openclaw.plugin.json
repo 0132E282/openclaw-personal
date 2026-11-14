@@ -1,0 +1,23 @@
+{
+  "id": "openclaw-personal",
+  "name": "Personal",
+  "description": "Official web launchers only. No inbox sync or sending.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/index.js",
+    "styles": [
+      "dist/control-ui/index.css"
+    ]
+  },
+  "contracts": {
+    "tools": []
+  }
+}
