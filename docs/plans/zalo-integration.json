@@ -1,0 +1,589 @@
+{
+  "title": "Kết nối thẻ Zalo với channel zalouser có sẵn của OpenClaw",
+  "description": "Kế hoạch nối thẻ Zalo của plugin openclaw-personal với channel Zalo Personal (zalouser) đã cài trong OpenClaw, chỉ đọc trạng thái qua Gateway RPC channels.status, giữ launcher Zalo Web, không tự đăng nhập/khởi động/gửi.",
+  "tags": [
+    "zalo",
+    "zalouser",
+    "control-ui",
+    "connector",
+    "openclaw-personal"
+  ],
+  "createdAt": "2026-11-15",
+  "content": {
+    "meta": {
+      "goal": "Thẻ Zalo trên trang Personal phản ánh trung thực trạng thái của channel Zalo đã có sẵn trong OpenClaw (zalouser) thay cho nhãn tĩnh 'Chưa kết nối vào trang', kèm hướng dẫn kết nối qua luồng chính thức của OpenClaw và cảnh báo rủi ro, không tự tích hợp Zalo riêng.",
+      "scope": "Chỉ phần Zalo: module src/connectors/zalo.js và test/zalo.test.mjs (phạm vi sở hữu của plan này). Các điểm chạm vào file dùng chung (src/control-ui.js, src/control-ui.css, build.mjs, test/inbox.test.mjs, README.md, DESIGN.md, VERIFICATION.md, openclaw.plugin.json) được liệt kê là việc phối hợp, không do plan này tự sửa. Email và Messenger thuộc plan khác.",
+      "currentState": [
+        "Plugin openclaw-personal 0.1.0 chỉ là launcher: src/control-ui.js render 3 thẻ tĩnh, thẻ Zalo chỉ có link https://chat.zalo.me/ và nhãn 'Chưa kết nối vào trang'; src/index.js không có operation/event/tool.",
+        "build.mjs chỉ copy 3 file (src/index.js, src/control-ui.js, src/control-ui.css) sang dist; module mới sẽ KHÔNG được copy nếu không sửa build.mjs.",
+        "test/inbox.test.mjs khẳng định đúng 3 nhãn 'Chưa kết nối vào trang' và 4 link; đổi trạng thái thẻ Zalo sẽ làm test này fail nếu không cập nhật.",
+        "Đã xác minh trên máy (~/.openclaw/bin/openclaw 2026.11.3, `openclaw plugins list`): plugin 'zalouser' (@openclaw/zalouser 2026.11.3, 'Zalo Personal', dùng zca-js) đã cài, loaded, enabled.",
+        "Đã xác minh `openclaw channels status`: 'Zalo Personal default: enabled, configured, not linked, stopped' - chưa có phiên Zalo (cần `openclaw channels login --channel zalouser`).",
+        "Plugin 'zalo' (Zalo Bot Creator/Marketplace, docs nói là bundled) KHÔNG xuất hiện trong `openclaw plugins list` trên máy này - chưa xác minh có sẵn. 'openclaw-zaloclawbot' (@zalo-platforms/openclaw-zaloclawbot, bên ngoài) chưa cài. Cả hai là bot, không phải hộp thư tài khoản cá nhân.",
+        "Không có lệnh `openclaw`/`node` trên PATH của shell kiểm tra; đã dùng ~/.openclaw/bin/openclaw. npm test/build/validate chưa chạy trong phiên lập kế hoạch."
+      ],
+      "sources": [
+        "README.md (ràng buộc: Zalo cá nhân không chính thức cần chấp nhận rủi ro rõ ràng)",
+        "VERIFICATION.md (HLD: Zalo cá nhân giữ launcher, connector interface, không tự gửi)",
+        "DESIGN.md (UI tokens, a11y, chip trạng thái, nguyên tắc trung thực)",
+        "node_modules/openclaw/docs/channels/zalouser.md, channels/zalo.md, channels/zaloclawbot.md",
+        "node_modules/openclaw/docs/gateway/protocol/rpc-system-and-channels.md (channels.status, web.login.*)",
+        "node_modules/openclaw/docs/plugins/feature-plugins.md (host.request, ControlUiView(container, context), prebuilt bundle phục vụ JS trong thư mục entry)",
+        "node_modules/openclaw/dist/channels-DP08Fi-Z.mjs (ChannelsStatusResultSchema, ChannelAccountSnapshotSchema)"
+      ]
+    },
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "text": "Thẻ Zalo đọc trạng thái thật của channel 'zalouser' từ Gateway qua RPC channels.status (chỉ đọc) và hiển thị trên chip trạng thái.",
+        "source": "Yêu cầu caller (kết nối với channel Zalo có sẵn) + docs rpc-system-and-channels.md"
+      },
+      {
+        "id": "REQ-002",
+        "text": "Phân loại trạng thái tài khoản mặc định của zalouser thành: chưa cài kênh, đã tắt, chưa cấu hình, chưa liên kết, đã liên kết nhưng đang dừng, đang hoạt động, có lỗi, không xác định.",
+        "source": "ChannelAccountSnapshotSchema (enabled/configured/linked/running/connected/lastError) + statusIssues"
+      },
+      {
+        "id": "REQ-003",
+        "text": "Khi đọc trạng thái thất bại (lỗi, quá thời gian, không đủ quyền) hiển thị 'Không đọc được trạng thái' và nút Thử lại; không đoán trạng thái.",
+        "source": "DESIGN.md mục 6 (trạng thái lỗi có nút thử lại) + nguyên tắc trung thực"
+      },
+      {
+        "id": "REQ-004",
+        "text": "Hiển thị hướng dẫn kết nối bằng văn bản theo trạng thái (cài: `openclaw plugins install @openclaw/zalouser`; đăng nhập: `openclaw channels login --channel zalouser`), không thực thi lệnh từ trang.",
+        "source": "docs channels/zalouser.md"
+      },
+      {
+        "id": "REQ-005",
+        "text": "Luôn hiển thị cảnh báo: zalouser là tự động hóa tài khoản cá nhân không chính thức, có thể bị khóa tài khoản; Zalo OA/Bot là sản phẩm khác.",
+        "source": "README.md mục Future integrations + docs zalouser.md Warning"
+      },
+      {
+        "id": "REQ-006",
+        "text": "Giữ nguyên launcher 'Mở Zalo Web' (https://chat.zalo.me/, target _blank, rel noopener noreferrer).",
+        "source": "src/control-ui.js hiện tại + test/inbox.test.mjs"
+      },
+      {
+        "id": "REQ-007",
+        "text": "(CHỜ QUYẾT ĐỊNH) Đăng nhập QR zalouser ngay trong trang qua web.login.start/web.login.wait, chỉ sau khi người dùng tích xác nhận chấp nhận rủi ro.",
+        "source": "docs rpc-system-and-channels.md; chỉ làm nếu người dùng duyệt OQ-001"
+      }
+    ],
+    "businessRules": [
+      {
+        "id": "BR-001",
+        "text": "Chỉ được gọi Gateway method 'channels.status' (không probe). Không gọi channels.start/stop/logout, web.login.*, config.*, message send, pairing.* (trừ REQ-007 nếu được duyệt).",
+        "source": "README/VERIFICATION: không tự gửi, không lưu thông tin đăng nhập; quyền host.request là quyền operator nên phải tự giới hạn"
+      },
+      {
+        "id": "BR-002",
+        "text": "Không đưa vào DOM các trường nhạy cảm của snapshot: allowFrom, credentialSource, tokenSource, profile, dbPath, probe, audit, lastError thô.",
+        "source": "VERIFICATION.md mục 7 (riêng tư) - giả định mức tối thiểu"
+      },
+      {
+        "id": "BR-003",
+        "text": "Plugin không import zca-js, không tự kết nối Zalo, không lưu cookie/QR/token; mọi kết nối thuộc channel zalouser của OpenClaw.",
+        "source": "README + VERIFICATION phi mục tiêu"
+      },
+      {
+        "id": "BR-004",
+        "text": "Trạng thái tài khoản cá nhân chỉ lấy từ channel id 'zalouser'; 'zalo' và 'openclaw-zaloclawbot' không được gộp vào.",
+        "source": "docs zalouser.md mục Naming, zalo.md, zaloclawbot.md"
+      },
+      {
+        "id": "BR-005",
+        "text": "Văn bản dựng bằng textContent, class tiền tố 'openclaw-personal__', nút >= 44px, focus-visible, không truyền đạt chỉ bằng màu.",
+        "source": "DESIGN.md mục 1, 4, 5"
+      }
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-001",
+        "requirement": "REQ-001, REQ-002, REQ-004",
+        "text": "Cho channels.status có channelAccounts.zalouser=[{accountId:'default',enabled:true,configured:true,linked:false,running:false}] -> chip 'Chưa liên kết' và hướng dẫn chứa `openclaw channels login --channel zalouser`."
+      },
+      {
+        "id": "AC-002",
+        "requirement": "REQ-002",
+        "text": "linked:true, running:true (connected khác false), lastError rỗng -> chip 'Đang hoạt động'."
+      },
+      {
+        "id": "AC-003",
+        "requirement": "REQ-002, REQ-004",
+        "text": "Không có khóa 'zalouser' trong channelAccounts/channelOrder -> chip 'Chưa cài kênh Zalo Personal' và hướng dẫn chứa `openclaw plugins install @openclaw/zalouser`."
+      },
+      {
+        "id": "AC-004",
+        "requirement": "REQ-002",
+        "text": "enabled:false -> 'Đã tắt'; configured:false -> 'Chưa cấu hình'; linked:true & running:false -> 'Đã liên kết, đang dừng'; lastError khác null hoặc statusIssues có channel 'zalouser' -> 'Có lỗi' (không hiện nội dung lỗi thô); kết quả không khớp schema -> 'Không xác định'."
+      },
+      {
+        "id": "AC-005",
+        "requirement": "REQ-003",
+        "text": "host.request reject hoặc quá hạn -> 'Không đọc được trạng thái' + nút 'Thử lại' (button, aria-label, >=44px); bấm Thử lại gọi lại đúng 1 lần; sau dispose kết quả trễ không cập nhật DOM."
+      },
+      {
+        "id": "AC-006",
+        "requirement": "BR-001",
+        "text": "Spy host.request chỉ ghi nhận method 'channels.status', không có method khác, không truyền probe:true."
+      },
+      {
+        "id": "AC-007",
+        "requirement": "REQ-005, REQ-006, BR-002, BR-003, BR-005",
+        "text": "Thẻ Zalo có văn bản cảnh báo rủi ro khóa tài khoản và câu phân biệt Zalo OA/Bot; link Zalo Web giữ href/target/rel; DOM không có iframe/input/textarea/script; DOM không chứa giá trị của allowFrom/credentialSource/lastError trong fixture."
+      },
+      {
+        "id": "AC-008",
+        "requirement": "BR-004",
+        "text": "Fixture chỉ có channelAccounts.zalo hoặc 'openclaw-zaloclawbot' đang chạy -> thẻ vẫn 'Chưa cài kênh Zalo Personal'."
+      },
+      {
+        "id": "AC-009",
+        "requirement": "REQ-001..REQ-006",
+        "text": "`npm run build` sinh dist/control-ui/connectors/zalo.js; `npm test` pass toàn bộ (gồm test/zalo.test.mjs và test/inbox.test.mjs đã cập nhật); `npm run validate` pass; kiểm tra thủ công trên Control UI thực với trạng thái hiện tại 'not linked' cho chip 'Chưa liên kết'."
+      },
+      {
+        "id": "AC-010",
+        "requirement": "REQ-007",
+        "text": "(Chỉ khi OQ-001 được duyệt) Nút đăng nhập QR bị vô hiệu cho tới khi tích xác nhận rủi ro; chỉ gọi web.login.start/wait với channel 'zalouser'; QR không được lưu; hủy/dispose dừng chờ."
+      }
+    ],
+    "assumptions": [
+      "A-001: host.request có dạng request(method, params) trả Promise; tên và chữ ký chính xác chưa xác minh do không tìm thấy file .d.ts của openclaw/plugin-sdk/control-ui - TASK-001 xác minh trước.",
+      "A-002: Kết nối operator của Control UI có quyền gọi channels.status (trang Channels built-in dùng method này); scope cụ thể chưa xác minh trong docs.",
+      "A-003: Chỉ hiển thị tài khoản mặc định (channelDefaultAccountId.zalouser, fallback 'default'); có nhiều tài khoản thì ghi thêm số tài khoản khác, không liệt kê.",
+      "A-004: Làm mới trạng thái khi mở trang và khi bấm 'Làm mới'/'Thử lại'; không polling định kỳ.",
+      "A-005: Bundle prebuilt phục vụ JS phụ thuộc nằm trong thư mục entry (dist/control-ui/) theo feature-plugins.md mục Bundle boundaries, nên dist/control-ui/connectors/zalo.js được tải qua import tương đối.",
+      "A-006: Theo docs, Control UI built-in có trang Channels hỗ trợ QR login; plugin chỉ hướng dẫn bằng văn bản, không tạo link nội bộ tới trang đó (host.navigation chỉ dựng URL trang plugin)."
+    ],
+    "openQuestions": [
+      "OQ-001: Có cho phép đăng nhập QR zalouser ngay trong trang Personal (REQ-007, web.login.*) sau khi tích chấp nhận rủi ro không, hay chỉ hiển thị trạng thái + hướng dẫn CLI? Mặc định của plan: chỉ đọc.",
+      "OQ-002: Có hiển thị danh sách hội thoại Zalo (các session do zalouser tạo, qua host.sessions.observe) trên trang không? Lưu ý zalouser trả lời qua agent - đây là thay đổi phạm vi lớn, plan hiện KHÔNG bao gồm.",
+      "OQ-003: Có cần hiển thị trạng thái channel 'zalo' (Bot API) / 'openclaw-zaloclawbot' như mục riêng không? Trên máy hiện chưa cài/không thấy.",
+      "OQ-004: Ai sở hữu các file dùng chung (src/control-ui.js, build.mjs, test/inbox.test.mjs, src/control-ui.css, README/DESIGN/VERIFICATION, mô tả trong openclaw.plugin.json) để áp phần nối dây? Plan này chỉ sở hữu src/connectors/zalo.* và test zalo.",
+      "OQ-005: Khi 'Có lỗi', có được hiện lastError (có thể chứa thông tin cá nhân) không? Mặc định: không hiện, chỉ gợi ý `openclaw channels status`."
+    ],
+    "blockers": [
+      "B-001: build.mjs (file dùng chung) phải copy src/connectors/zalo.js -> dist/control-ui/connectors/zalo.js, nếu không bản build sẽ lỗi import. Cần chủ sở hữu build.mjs thực hiện (TASK-004).",
+      "B-002: src/control-ui.js (dùng chung) phải truyền context.host vào thẻ Zalo và gọi mountZaloStatus; test/inbox.test.mjs phải nới assert '3 nhãn Chưa kết nối vào trang'. Cần phối hợp với plan Email/Messenger để tránh xung đột (TASK-004)."
+    ],
+    "technicalSolution": "Luồng (chỉ đọc):\n1. Trang 'inbox' mount(container, context) -> thẻ Zalo tạo vùng trạng thái -> mountZaloStatus(slot, context.host).\n2. loadZaloStatus(host, signal) gọi host.request('channels.status', {}) (không probe) với timeout cục bộ (đề xuất 10s, AbortController); bỏ kết quả nếu signal đã abort hoặc có yêu cầu mới hơn.\n3. deriveZaloStatus(result) là hàm thuần: kiểm tra result.channelAccounts là object; lấy mảng channelAccounts.zalouser; nếu thiếu -> 'not-installed'. Chọn account theo channelDefaultAccountId.zalouser (fallback 'default', rồi phần tử đầu). Thứ tự: enabled===false -> 'disabled'; configured===false -> 'not-configured'; lastError (chuỗi khác rỗng) hoặc statusIssues có channel==='zalouser' -> 'error'; linked===false -> 'not-linked'; running===true && connected!==false -> 'running'; linked===true && running!==true -> 'stopped'; còn lại -> 'unknown'. Trả {state, accountId, otherAccountCount} - không chép trường nhạy cảm.\n4. ZALO_STATE_COPY: map state -> {label tiếng Việt, hint} (hint chứa lệnh CLI dạng text: cài plugin / đăng nhập / `openclaw channels status`). Render bằng textContent; trạng thái 'load-failed' có button 'Thử lại'; các trạng thái khác có button 'Làm mới'.\n5. Cảnh báo rủi ro cố định trong module (RISK_NOTICE) + câu phân biệt Zalo OA/Bot.\n\nModule src/connectors/zalo.js (ESM, không phụ thuộc, an toàn trình duyệt) export: ZALO_PERSONAL_CHANNEL='zalouser', ZALO_STATES, ZALO_STATE_COPY, RISK_NOTICE, deriveZaloStatus, loadZaloStatus, mountZaloStatus(slot, host) -> {refresh(), dispose()}. Không có backend operation mới; src/index.js và contracts.tools giữ rỗng; không cần SQLite/keychain (VERIFICATION) vì không lưu dữ liệu.\n\nDữ liệu: không thêm bảng/trường/lưu trữ. Đầu vào là ChannelsStatusResult (ts, channelOrder, channelAccounts, channelDefaultAccountId, statusIssues) theo node_modules/openclaw/dist/channels-DP08Fi-Z.mjs.\n\nAPI: chỉ Gateway RPC channels.status qua host.request. REQ-007 (nếu duyệt) mới dùng web.login.start/web.login.wait với channel 'zalouser'.\n\nNối dây (file dùng chung, ngoài quyền sở hữu): src/control-ui.js mountInbox nhận (container, context) và với service 'zalo' chèn slot + mountZaloStatus(slot, context?.host), gom dispose; nếu không có host (test cũ) giữ nhãn tĩnh. build.mjs copy src/connectors/zalo.js -> dist/control-ui/connectors/zalo.js (import tương đối './connectors/zalo.js' đúng ở cả src và dist). CSS chip/hint/button thêm vào src/control-ui.css với tiền tố openclaw-personal__zalo-. Cập nhật test/inbox.test.mjs, notice, README/DESIGN/VERIFICATION, description manifest để không còn câu 'không phản ánh các kênh khác'.\n\nMigration/rollback: không có migration dữ liệu. Rollback = revert commit (xóa src/connectors/zalo.js, test/zalo.test.mjs, dòng copy trong build.mjs, phần nối dây trong control-ui.js), rebuild và cập nhật bản cài. Bản cài hiện tại không đổi cho tới khi build/pack/update thủ công.\n\nĐộ phức tạp: deriveZaloStatus O(a + s) với a = số account zalouser, s = số statusIssues; một RPC mỗi lần mở trang/bấm làm mới.",
+    "tasks": [
+      {
+        "id": "TASK-001",
+        "title": "Xác minh chữ ký host.request, quyền và dạng kết quả channels.status trên Gateway thật",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "A-001/A-002 chưa xác minh; sai chữ ký thì toàn bộ module hỏng.",
+        "requirements": [
+          "REQ-001",
+          "BR-001"
+        ],
+        "acceptanceCriteria": [
+          "AC-006",
+          "AC-009"
+        ],
+        "inScope": "Đọc node_modules/openclaw/dist/plugin-sdk/control-ui.js để xác định chữ ký request và context.host; lấy kết quả channels.status chỉ đọc (vd `~/.openclaw/bin/openclaw channels status --json` nếu hỗ trợ) làm fixture đã ẩn danh.",
+        "outOfScope": "Không gọi --probe, không login/start/stop channel, không sửa config.",
+        "dependencies": [],
+        "approach": "1. grep chữ ký request trong dist/plugin-sdk/control-ui.js. 2. Xác nhận ControlUiView(container, context) có context.host. 3. Lấy JSON status hiện tại, xóa trường nhạy cảm, ghi lại hình dạng channelAccounts.zalouser. 4. Cập nhật A-001/A-002 trong plan thành đã xác minh hoặc blocker.",
+        "test": "Bằng chứng: trích dòng chữ ký request; JSON thực có channelAccounts.zalouser[0] với linked:false, running:false.",
+        "doneWhen": "A-001, A-002 được xác nhận hoặc ghi blocker cụ thể; fixture cho TASK-002/003 có sẵn.",
+        "filesToChange": [],
+        "result": "Đã xác minh. Chữ ký: host.request(method, params) trả Promise (node_modules/openclaw/dist/plugin-sdk/feature-contract.js dòng 15, host.signal/host.pluginId có trong host); mount(container, context) nhận context.host (docs/plugins/feature-plugins.md). Kết quả thật của `~/.openclaw/bin/openclaw channels status --json` (chỉ đọc, không probe): channelAccounts.zalouser[0] = {accountId:'default',enabled:true,configured:true,linked:false,running:false,stateReason:'not linked',lastError:null}; channelDefaultAccountId.zalouser='default'; statusIssues có {channel:'zalouser',kind:'auth',message:'Not authenticated (no saved Zalo session).'}. Phát hiện: thứ tự quy tắc của plan sẽ phân loại nhầm trạng thái này là 'error', nên deriveZaloStatus kiểm tra linked===false trước lỗi. A-001 đã xác minh; A-002 (scope) chưa chứng minh riêng lẻ: docs ghi trạng thái chỉ đọc cần operator.read. Fixture đã ẩn danh dùng cho harness (ts, channelOrder, channelAccounts, channelDefaultAccountId, statusIssues)."
+      },
+      {
+        "id": "TASK-002",
+        "title": "Tạo module src/connectors/zalo.js: hàm thuần deriveZaloStatus, nội dung tiếng Việt và cảnh báo rủi ro",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Lõi logic phân loại trạng thái, mọi phần khác phụ thuộc.",
+        "requirements": [
+          "REQ-002",
+          "REQ-004",
+          "REQ-005",
+          "BR-002",
+          "BR-003",
+          "BR-004"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004",
+          "AC-008"
+        ],
+        "inScope": "Export ZALO_PERSONAL_CHANNEL, ZALO_STATES, ZALO_STATE_COPY, RISK_NOTICE, deriveZaloStatus(result) theo thứ tự quy tắc trong technicalSolution; đầu ra chỉ gồm state/accountId/otherAccountCount.",
+        "outOfScope": "Không DOM, không RPC (TASK-003); không hỗ trợ channel zalo/zaloclawbot (OQ-003).",
+        "dependencies": [
+          "TASK-001"
+        ],
+        "approach": "1. Hàm thuần, phòng thủ với input không phải object. 2. Bảng copy state -> label/hint theo AC. 3. Object.freeze các hằng. 4. Không import gì.",
+        "test": "test/zalo.test.mjs: bảng fixture cho từng trạng thái (AC-001..AC-004), fixture chỉ có 'zalo'/'openclaw-zaloclawbot' (AC-008), input null/sai schema -> 'unknown'; assert output không có khóa allowFrom/credentialSource/lastError.",
+        "doneWhen": "`node --test test/zalo.test.mjs` pass các case derive.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/zalo.js",
+            "changes": "Tạo mới: hằng, bảng copy, deriveZaloStatus."
+          },
+          {
+            "path": "test/zalo.test.mjs",
+            "changes": "Tạo mới: test bảng cho deriveZaloStatus."
+          }
+        ],
+        "result": "Tạo src/connectors/zalo.ts (TypeScript, thay cho zalo.js do repo đã chuyển sang React + TS): ZALO_PERSONAL_CHANNEL, ZALO_STATE_COPY (đóng băng), RISK_NOTICE, deriveZaloStatus thuần chỉ trả {state, accountId, otherAccountCount}. Kiểm tra: test/zalo.test.mjs bảng 12 trường hợp (AC-001..004, AC-008) và assert đầu ra không chứa allowFrom/credentialSource/lastError; pass trong 19/19. Không có ảnh vì module chưa hiển thị riêng (xem TASK-003/004)."
+      },
+      {
+        "id": "TASK-003",
+        "title": "Thêm loadZaloStatus và mountZaloStatus: gọi channels.status chỉ đọc, render chip/hint/cảnh báo, Thử lại, dispose an toàn",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Phần nối trạng thái thật vào UI, đáp ứng REQ-001/REQ-003.",
+        "requirements": [
+          "REQ-001",
+          "REQ-003",
+          "REQ-004",
+          "REQ-005",
+          "BR-001",
+          "BR-002",
+          "BR-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "inScope": "loadZaloStatus(host, signal) với timeout và bỏ kết quả cũ; mountZaloStatus(slot, host) render 'Đang kiểm tra...', kết quả, lỗi + button Thử lại/Làm mới, RISK_NOTICE và câu phân biệt Zalo OA/Bot; trả {refresh, dispose}; host thiếu request -> 'Không đọc được trạng thái', không ném lỗi.",
+        "outOfScope": "Không đổi link Zalo Web (thuộc control-ui.js), không login QR (REQ-007), không polling.",
+        "dependencies": [
+          "TASK-002"
+        ],
+        "approach": "1. AbortController nội bộ, hủy khi dispose/refresh mới. 2. Chỉ textContent; button type=button, aria-label, class openclaw-personal__zalo-*. 3. role='status'/aria-live='polite' cho chip.",
+        "test": "test/zalo.test.mjs với fake DOM như inbox.test.mjs và fake host: (a) spy chỉ thấy 'channels.status', không probe:true; (b) reject -> nhãn lỗi + button Thử lại, bấm -> gọi thêm đúng 1 lần; (c) dispose trước khi promise resolve -> DOM không đổi, slot rỗng; (d) fixture chứa allowFrom/lastError giả -> không xuất hiện trong textContent; (e) không có iframe/input/textarea/script; (f) có văn bản rủi ro khóa tài khoản.",
+        "doneWhen": "Toàn bộ test zalo pass; review xác nhận không có method RPC nào khác.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/zalo.js",
+            "changes": "Thêm loadZaloStatus, mountZaloStatus."
+          },
+          {
+            "path": "test/zalo.test.mjs",
+            "changes": "Thêm test DOM/RPC/dispose."
+          }
+        ],
+        "result": "Thêm loadZaloStatus (src/connectors/zalo.ts, một RPC channels.status chỉ đọc, timeout 10s qua src/host.ts) và component React src/connectors/ZaloStatus.tsx (chip/hint/Làm mới-Thử lại/cảnh báo rủi ro/ghi chú OA-Bot, bỏ kết quả cũ khi unmount). Thay cho mountZaloStatus vì trang đã là React. Kiểm tra: test/zalo.test.mjs (spy chỉ ghi channels.status, không probe; reject -> 'Không đọc được trạng thái' + Thử lại gọi đúng 1 lần; unmount trước khi resolve -> container rỗng; không lộ lastError/allowFrom; không iframe/input/textarea/script). Ảnh: docs/plans/zalo-integration/evidence/TASK-003-before.png và docs/plans/zalo-integration/evidence/TASK-003-after.png (thẻ Zalo ở trạng thái Chưa liên kết). API: host.request('channels.status', {}) -> kết quả cùng dạng JSON ở TASK-001 (đã ẩn danh); chưa gọi qua WebSocket Gateway thật từ trình duyệt, không có header/status HTTP."
+      },
+      {
+        "id": "TASK-004",
+        "title": "(Phối hợp - file dùng chung) Nối mountZaloStatus vào thẻ Zalo, build copy module, cập nhật test inbox và CSS",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Không có bước này module không xuất hiện trên trang và build lỗi import (B-001, B-002).",
+        "requirements": [
+          "REQ-001",
+          "REQ-006",
+          "BR-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-007",
+          "AC-009"
+        ],
+        "inScope": "src/control-ui.js: mountInbox(container, context) truyền context?.host cho thẻ Zalo, gom dispose, giữ link Zalo Web; sửa câu notice 'không phản ánh các kênh khác' cho thẻ Zalo. build.mjs: thêm copy src/connectors/zalo.js -> dist/control-ui/connectors/zalo.js và mkdir. src/control-ui.css: style chip/hint/button/cảnh báo theo DESIGN.md. test/inbox.test.mjs: nới assert nhãn tĩnh cho thẻ Zalo.",
+        "outOfScope": "Thẻ Email/Messenger, các connector khác.",
+        "dependencies": [
+          "TASK-003"
+        ],
+        "approach": "1. Chờ chủ sở hữu file dùng chung xác nhận (OQ-004). 2. Thay đổi tối thiểu, một nhánh cho service 'zalo'. 3. Chạy npm run build, npm test.",
+        "test": "npm run build tạo dist/control-ui/connectors/zalo.js; npm test pass cả inbox và zalo; không host -> hành vi cũ; có fake host -> thẻ Zalo có chip động, vẫn 4 link.",
+        "doneWhen": "Build + test pass, chủ sở hữu file dùng chung chấp thuận diff.",
+        "filesToChange": [
+          {
+            "path": "src/control-ui.js",
+            "changes": "Nhận context, gọi mountZaloStatus cho thẻ zalo, gom dispose, chỉnh notice."
+          },
+          {
+            "path": "build.mjs",
+            "changes": "Copy src/connectors/zalo.js sang dist/control-ui/connectors/zalo.js."
+          },
+          {
+            "path": "src/control-ui.css",
+            "changes": "Style openclaw-personal__zalo-*."
+          },
+          {
+            "path": "test/inbox.test.mjs",
+            "changes": "Cập nhật assert nhãn trạng thái thẻ Zalo."
+          }
+        ],
+        "result": "Đã nối vào file dùng chung: src/control-ui.tsx (mountInbox(container, context) truyền context.host; thẻ Zalo dùng ZaloStatus, không có host thì giữ nhãn tĩnh; sửa câu notice), build.mjs (esbuild bundle cả UI và backend nên module connectors vào dist, bỏ blocker B-001), src/control-ui.css (style openclaw-personal__zalo-* và email-status), test/inbox.test.mjs giữ 3/3. `npm test` 19/19 pass. Ảnh: docs/plans/zalo-integration/evidence/TASK-004-before.png, docs/plans/zalo-integration/evidence/TASK-004-after.png (trang đầy đủ, dữ liệu channels.status thật đã ẩn danh, 3 link Zalo/Gmail/Outlook/Messenger giữ nguyên). Lưu ý: 3 file dùng chung được sửa chung với plan Email, chưa có người duyệt diff (OQ-004)."
+      },
+      {
+        "id": "TASK-005",
+        "title": "(Phối hợp) Cập nhật README, DESIGN, VERIFICATION và description manifest cho trạng thái Zalo chỉ đọc",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P1",
+        "priorityReason": "Tài liệu hiện nói 'launcher only, không phản ánh kênh khác' - sẽ sai sau khi nối.",
+        "requirements": [
+          "REQ-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-009"
+        ],
+        "inScope": "Mô tả thẻ Zalo đọc trạng thái channel zalouser (chỉ đọc), cảnh báo rủi ro, hướng dẫn CLI; ghi bằng chứng xác minh vào VERIFICATION.md mục 11.",
+        "outOfScope": "Nội dung Email/Messenger; VERIFICATION.md/DESIGN.md đang có thay đổi chưa commit của người dùng - không ghi đè.",
+        "dependencies": [
+          "TASK-004"
+        ],
+        "approach": "1. Chờ OQ-004. 2. Sửa câu chữ tối thiểu. 3. npm run validate.",
+        "test": "npm run validate pass; đọc lại tài liệu khớp hành vi.",
+        "doneWhen": "Tài liệu không còn khẳng định trái với hành vi mới; validate pass.",
+        "filesToChange": [
+          {
+            "path": "README.md",
+            "changes": "Current features/Future integrations: thẻ Zalo đọc trạng thái zalouser."
+          },
+          {
+            "path": "DESIGN.md",
+            "changes": "Mục 4: chip trạng thái Zalo động, trạng thái lỗi/Thử lại."
+          },
+          {
+            "path": "VERIFICATION.md",
+            "changes": "Mục 1/2/11: Zalo dùng channel zalouser chỉ đọc; bằng chứng xác minh."
+          },
+          {
+            "path": "openclaw.plugin.json",
+            "changes": "description nếu chủ sở hữu muốn phản ánh việc đọc trạng thái channel."
+          }
+        ],
+        "result": "Cập nhật README.md (Launcher plus read-only status), DESIGN.md mục 4 (chip Zalo động, khối trạng thái Email), VERIFICATION.md mục 11 (bằng chứng xác minh, thêm cuối mục, không xóa nội dung), openclaw.plugin.json description. `openclaw plugins build --root .` rồi `openclaw plugins validate --json` -> valid:true, errors:[]. Không có thay đổi hiển thị trực tiếp nên không có ảnh."
+      },
+      {
+        "id": "TASK-006",
+        "title": "Kiểm tra thủ công trên Control UI thật với zalouser đang 'not linked'",
+        "status": "BLOCKED",
+        "priority": "P1",
+        "priorityReason": "Hiển thị desktop chưa từng được xác minh (VERIFICATION mục 11).",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-003"
+        ],
+        "acceptanceCriteria": [
+          "AC-009"
+        ],
+        "inScope": "Build, pack, cập nhật bản cài theo README (chỉ khi người dùng cho phép), mở trang Personal, xác nhận chip 'Chưa liên kết' và hướng dẫn login; dừng Gateway để thấy 'Không đọc được trạng thái' + Thử lại.",
+        "outOfScope": "Không đăng nhập Zalo thật trừ khi người dùng tự làm và chấp nhận rủi ro.",
+        "dependencies": [
+          "TASK-004"
+        ],
+        "approach": "1. npm run build && openclaw plugins build --root . && npm run validate. 2. Cài bản build theo README sau khi người dùng đồng ý. 3. Ghi ảnh chụp/ghi chú bằng chứng.",
+        "test": "Quan sát trình duyệt: chip, hint, cảnh báo, focus bàn phím, nút >= 44px; console không lỗi import.",
+        "doneWhen": "Có bằng chứng thực tế cho trạng thái 'Chưa liên kết' và lỗi tải.",
+        "filesToChange": [],
+        "result": "Chưa làm xong theo đúng nghĩa: cần cài bản build vào OpenClaw thật (sửa hệ thống ngoài, plan yêu cầu người dùng đồng ý trước) nên chưa kiểm tra trên Control UI thật. Đã làm phần thay thế: build + validate pass; mở trang trong Chrome headless với host giả phục vụ dữ liệu channels.status thật, chụp trạng thái 'Chưa liên kết' (docs/plans/zalo-integration/evidence/TASK-004-after.png) và trạng thái Gateway lỗi 'Không đọc được trạng thái' + Thử lại (docs/plans/zalo-integration/evidence/TASK-006-after.png, trước: docs/plans/zalo-integration/evidence/TASK-006-before.png). Chưa kiểm tra: focus bàn phím, console trên Control UI thật, việc host có tải đúng bundle."
+      },
+      {
+        "id": "TASK-007",
+        "title": "(Chờ OQ-001) Đăng nhập QR zalouser trong trang sau xác nhận rủi ro",
+        "status": "BLOCKED",
+        "priority": "P2",
+        "priorityReason": "Tùy chọn, rủi ro khóa tài khoản và cần quyền ghi; chỉ làm khi người dùng duyệt.",
+        "requirements": [
+          "REQ-007"
+        ],
+        "acceptanceCriteria": [
+          "AC-010"
+        ],
+        "inScope": "Checkbox chấp nhận rủi ro, nút 'Đăng nhập bằng QR' gọi web.login.start {channel:'zalouser'} rồi web.login.wait với sessionKey trả về; hiển thị QR dạng img, không lưu; hủy khi dispose.",
+        "outOfScope": "Logout, start/stop channel, sửa config.",
+        "dependencies": [
+          "TASK-003"
+        ],
+        "approach": "Lập kế hoạch chi tiết lại sau khi OQ-001 được trả lời (quyền, timeout, a11y QR).",
+        "test": "Fake host: nút disabled khi chưa tích; chỉ gọi web.login.* với channel 'zalouser'; dispose hủy wait.",
+        "doneWhen": "Người dùng duyệt và AC-010 có bằng chứng.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/zalo.js",
+            "changes": "Thêm luồng QR login có cổng xác nhận."
+          },
+          {
+            "path": "test/zalo.test.mjs",
+            "changes": "Test cổng xác nhận và giới hạn method."
+          }
+        ],
+        "result": "Không làm: chờ OQ-001 (người dùng chưa quyết có cho đăng nhập QR zalouser, thao tác ghi, rủi ro khóa tài khoản). Giữ BLOCKED."
+      }
+    ],
+    "executionOrder": [
+      "TASK-001",
+      "TASK-002",
+      "TASK-003",
+      "TASK-004",
+      "TASK-005",
+      "TASK-006",
+      "TASK-007"
+    ],
+    "traceability": [
+      {
+        "requirement": "REQ-001",
+        "acceptanceCriteria": [
+          "AC-006",
+          "AC-009"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003",
+          "TASK-004",
+          "TASK-006"
+        ],
+        "test": "test/zalo.test.mjs (spy RPC); kiểm tra thủ công",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-002",
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-006"
+        ],
+        "test": "test/zalo.test.mjs bảng fixture",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-003",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-003",
+          "TASK-006"
+        ],
+        "test": "test/zalo.test.mjs reject/Thử lại/dispose; dừng Gateway thủ công",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-004",
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-003"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "test/zalo.test.mjs kiểm hint chứa lệnh CLI",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-005",
+        "acceptanceCriteria": [
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003",
+          "TASK-005"
+        ],
+        "test": "test/zalo.test.mjs kiểm văn bản cảnh báo",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-006",
+        "acceptanceCriteria": [
+          "AC-007",
+          "AC-009"
+        ],
+        "tasks": [
+          "TASK-004"
+        ],
+        "test": "test/inbox.test.mjs giữ 4 link chính thức",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-007",
+        "acceptanceCriteria": [
+          "AC-010"
+        ],
+        "tasks": [
+          "TASK-007"
+        ],
+        "test": "test/zalo.test.mjs (khi được duyệt)",
+        "result": "Chờ OQ-001"
+      },
+      {
+        "requirement": "BR-001",
+        "acceptanceCriteria": [
+          "AC-006"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003"
+        ],
+        "test": "spy host.request",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-002",
+        "acceptanceCriteria": [
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "fixture có trường nhạy cảm không lọt DOM",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-003",
+        "acceptanceCriteria": [
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-002"
+        ],
+        "test": "review import: module không import gì; không input/iframe",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-004",
+        "acceptanceCriteria": [
+          "AC-008"
+        ],
+        "tasks": [
+          "TASK-002"
+        ],
+        "test": "fixture chỉ có zalo/openclaw-zaloclawbot",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-005",
+        "acceptanceCriteria": [
+          "AC-005",
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "test DOM: button aria-label, textContent; kiểm tra focus thủ công",
+        "result": "Chưa chạy"
+      }
+    ],
+    "remainingRisks": [
+      "R-001: host.request mang quyền operator đầy đủ; gọi nhầm method có thể thay đổi hệ thống - giảm bằng hằng method duy nhất + test spy (BR-001).",
+      "R-002: API plugin OpenClaw là experimental; schema channels.status có thể đổi giữa phiên bản - deriveZaloStatus phòng thủ, trả 'unknown'.",
+      "R-003: zalouser là tự động hóa không chính thức qua zca-js; hiển thị trạng thái không giảm rủi ro khóa tài khoản - chỉ thông báo, không khuyến khích đăng nhập.",
+      "R-004: Xung đột chỉnh sửa src/control-ui.js, build.mjs, test/inbox.test.mjs với plan Email/Messenger (docs/plans/messenger-integration.json, email-integration.json) - cần một người tích hợp (OQ-004).",
+      "R-005: VERIFICATION.md và DESIGN.md đang có thay đổi chưa commit của người dùng; không được ghi đè.",
+      "R-006: channels.status không probe chỉ phản ánh trạng thái ghi nhận gần nhất, có thể trễ so với kết nối Zalo thực tế."
+    ],
+    "status": "IN_PROGRESS"
+  },
+  "status": "IN_PROGRESS"
+}

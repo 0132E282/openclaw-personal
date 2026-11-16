@@ -6,7 +6,7 @@ Personal communication hub for OpenClaw. Package/plugin ID: `openclaw-personal`.
 
 Adds an isolated navigation entry with official Gmail, Outlook, Zalo Web and Messenger launchers. Links open externally; each service owns its login.
 
-**Launcher only, not a unified inbox.** No message synchronization, unread counts, notifications, credential storage, website embedding, or automatic sending. No configured account messages are read. LinkedIn and in-app connectors are future work.
+**Launcher plus read-only status, not a unified inbox.** The Zalo card reads the status of OpenClaw's own `zalouser` channel (`channels.status`, no probe), the Messenger card shows the status of the third-party `fb-messenger` channel (Facebook Page/Instagram, not personal Messenger; `channels.status`), and the Email card shows whether OpenClaw's Gmail PubSub hook or `imap` plugin is configured (`email.status`, booleans and counts only). No message synchronization, unread counts, notifications, credential storage, website embedding, login, configuration changes, or automatic sending. No account messages are read. LinkedIn and in-app connectors are future work.
 
 ## Develop
 
@@ -20,12 +20,12 @@ openclaw plugins build --root .
 npm run validate
 ```
 
-- `src/control-ui.js`: page and navigation; page ID `inbox`.
+- `src/control-ui.tsx`: React + TypeScript page and navigation; page ID `inbox`.
 - `src/control-ui.css`: namespaced styles.
 - `src/index.js`: feature SDK backend, with no operations, events or tools.
 - `test/inbox.test.mjs`: official URL, DOM, accessibility and registration checks.
 
-Build copies browser source to precompiled ESM assets declared in the manifest. The host constructs the page route.
+Build bundles React with esbuild into the precompiled ESM asset declared in the manifest; `npm run typecheck` runs tsc. The host constructs the page route.
 
 ## Package
 

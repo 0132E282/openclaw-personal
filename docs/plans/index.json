@@ -1,0 +1,39 @@
+[
+  {
+    "title": "Messenger integration (read-only fb-messenger channel status)",
+    "description": "Thẻ Messenger hiển thị trạng thái chỉ đọc của kênh bên thứ ba fb-messenger (Facebook Page/Instagram); Messenger cá nhân giữ launcher.",
+    "tags": [
+      "messenger",
+      "fb-messenger",
+      "connector",
+      "control-ui",
+      "read-only"
+    ],
+    "path": "docs/plans/messenger-integration.json"
+  },
+  {
+    "title": "Email integration (read-only OpenClaw Gmail PubSub / IMAP status)",
+    "description": "Thẻ Email hiển thị trạng thái chỉ đọc của tích hợp email sẵn có trong OpenClaw (Gmail PubSub hook, plugin imap); Outlook giữ launcher; không lưu mật khẩu, không gửi.",
+    "tags": [
+      "email",
+      "gmail",
+      "outlook",
+      "imap",
+      "control-ui",
+      "read-only"
+    ],
+    "path": "docs/plans/email-integration.json"
+  },
+  {
+    "title": "Kết nối thẻ Zalo với channel zalouser có sẵn của OpenClaw",
+    "description": "Thẻ Zalo đọc trạng thái chỉ đọc của channel zalouser (Zalo Personal, không chính thức) qua channels.status; giữ launcher Zalo Web, không tự đăng nhập/gửi.",
+    "tags": [
+      "zalo",
+      "zalouser",
+      "control-ui",
+      "connector",
+      "openclaw-personal"
+    ],
+    "path": "docs/plans/zalo-integration.json"
+  }
+]

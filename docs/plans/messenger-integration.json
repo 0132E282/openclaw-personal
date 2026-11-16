@@ -1,0 +1,495 @@
+{
+  "title": "Messenger integration (read-only fb-messenger channel status)",
+  "description": "Kế hoạch kết nối thẻ Messenger của plugin openclaw-personal với kênh Messenger đã có trong OpenClaw (plugin bên thứ ba fb-messenger, phạm vi Facebook Page/Instagram) theo hướng chỉ đọc trạng thái; Messenger cá nhân giữ launcher.",
+  "tags": [
+    "messenger",
+    "fb-messenger",
+    "connector",
+    "control-ui",
+    "read-only"
+  ],
+  "createdAt": "2026-11-15",
+  "content": {
+    "meta": {
+      "goal": "Thẻ Messenger trên trang Personal hiển thị trung thực trạng thái kênh fb-messenger (Facebook Page Messenger/Instagram) đã có trong OpenClaw, đọc qua Gateway RPC chỉ đọc, đồng thời giữ launcher messenger.com cho Messenger cá nhân.",
+      "scope": "Chỉ sở hữu src/connectors/messenger.js và test/messenger.test.mjs. Việc nối vào src/control-ui.js, build.mjs, test/inbox.test.mjs là file dùng chung với plan Email/Zalo, cần điều phối (TASK-004). Không gửi tin, không cấu hình/khởi động kênh, không liệt kê hội thoại (chờ quyết định).",
+      "currentState": [
+        "openclaw-personal 0.1.0 chỉ là launcher: src/control-ui.js có card id 'messenger' với link https://www.messenger.com/, src/index.js không có operations/events/tools, test/inbox.test.mjs khóa 4 URL chính thức và 3 chip 'Chưa kết nối vào trang'.",
+        "OpenClaw 2026.11.3 (node_modules/openclaw): danh mục kênh chính thức trong docs/channels/index.md và dist/extensions KHÔNG có kênh Messenger/Facebook (grep 'messenger|facebook' trong docs/dist/skills không có kết quả liên quan).",
+        "Bản cài cục bộ ~/.openclaw/extensions/fb-messenger: plugin bên thứ ba 'openclaw-fb-messenger' 0.3.1 (tác giả tuanminhhole, license UNLICENSED/proprietary, nguồn ClawHub tuanminhhole/openclaw-fb-messenger), channel id 'fb-messenger', alias 'fb'/'messenger'. Phạm vi: Facebook PAGE Messenger + Instagram Direct qua relay connect.monkeytech.vn hoặc webhook + Graph API; trả lời do agent OpenClaw sinh ra. Không phải Messenger cá nhân.",
+        "~/.openclaw/openclaw.json (đọc chỉ kiểm tra khóa, không in secret): plugins.entries['fb-messenger'].enabled=true; channels['fb-messenger'] có dmPolicy='open', 0 account, không có pageAccessToken; không có ~/.openclaw/credentials/fb-messenger => kênh chưa được kết nối thực tế.",
+        "CLI 'openclaw' không có trên PATH và 'node' không có trong shell hiện tại => chưa chạy được 'openclaw plugins list', 'openclaw channels status', 'npm test' trong phiên lập kế hoạch.",
+        "Feature plugin docs (node_modules/openclaw/docs/plugins/feature-plugins.md): view nhận context.host; host.request gọi Gateway RPC theo scope của operator; host.sessions.observe cho phép truy vấn session. Gateway RPC 'channels.status' trả tóm tắt trạng thái kênh built-in + plugin (docs/gateway/protocol/rpc-system-and-channels.md); hình dạng JSON chi tiết chưa xác minh."
+      ]
+    },
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "title": "Hiển thị trạng thái kênh fb-messenger trên thẻ Messenger",
+        "detail": "Đọc trạng thái kênh 'fb-messenger' qua Gateway RPC chỉ đọc 'channels.status' và hiển thị mức: chưa có kênh / đã cài chưa cấu hình / đã cấu hình chưa chạy / đang chạy / không xác định.",
+        "source": "Yêu cầu giao việc (kết nối Messenger với plugin/channel đã có); docs rpc-system-and-channels.md",
+        "status": "confirmed"
+      },
+      {
+        "id": "REQ-002",
+        "title": "Phân biệt Facebook Page/Instagram với Messenger cá nhân",
+        "detail": "UI và dữ liệu connector luôn ghi rõ fb-messenger là kênh Facebook Page/Instagram, không phải Messenger cá nhân; không tuyên bố hỗ trợ Messenger cá nhân.",
+        "source": "README.md 'Future integrations'; VERIFICATION.md §1",
+        "status": "confirmed"
+      },
+      {
+        "id": "REQ-003",
+        "title": "Giữ launcher Messenger cá nhân",
+        "detail": "Link https://www.messenger.com/ (target _blank, rel noopener noreferrer) giữ nguyên.",
+        "source": "src/control-ui.js; test/inbox.test.mjs; DESIGN.md §6",
+        "status": "confirmed"
+      },
+      {
+        "id": "REQ-004",
+        "title": "Không credential, không gửi, không ghi cấu hình",
+        "detail": "Connector không đọc/lưu/hiển thị token, relay key, appSecret; không gửi tin; không gọi RPC ghi hoặc admin.",
+        "source": "README.md; VERIFICATION.md §5, §7",
+        "status": "confirmed"
+      },
+      {
+        "id": "REQ-005",
+        "title": "Lỗi an toàn và trung thực",
+        "detail": "Khi host thiếu request, Gateway lỗi/timeout, thiếu scope hoặc response sai dạng: trạng thái 'không xác định', trang và launcher vẫn hoạt động, có Thử lại.",
+        "source": "DESIGN.md §1 (trung thực), §6 (trạng thái lỗi có nút thử lại)",
+        "status": "confirmed"
+      }
+    ],
+    "businessRules": [
+      {
+        "id": "BR-001",
+        "rule": "Không có đường gửi tin nhắn nào từ trang Personal/connector Messenger.",
+        "source": "VERIFICATION.md §5; README.md"
+      },
+      {
+        "id": "BR-002",
+        "rule": "Connector chỉ được gọi RPC 'channels.status'; cấm channels.start/stop/logout, web.login.*, config.patch, channels.pairing.*.",
+        "source": "REQ-004; docs rpc-system-and-channels.md (start/stop là operator.admin)"
+      },
+      {
+        "id": "BR-003",
+        "rule": "Chỉ giữ trường status-safe theo whitelist (channel id, label, số account, enabled/configured/running); văn bản dựng bằng textContent.",
+        "source": "VERIFICATION.md §7; DESIGN.md §1"
+      },
+      {
+        "id": "BR-004",
+        "rule": "Chỉ dùng chữ 'đang chạy' khi ít nhất một account báo running=true; 'configured' không được hiển thị là 'đã kết nối'.",
+        "source": "docs cli/channels.md (started/running không chứng minh kết nối provider khỏe)"
+      },
+      {
+        "id": "BR-005",
+        "rule": "Nhãn kênh: Facebook Page Messenger (kênh fb-messenger, plugin bên thứ ba), kèm câu 'không phải Messenger cá nhân'.",
+        "source": "README.md; package.json của fb-messenger (author tuanminhhole, UNLICENSED)"
+      }
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-001",
+        "requirements": [
+          "REQ-001",
+          "BR-004"
+        ],
+        "criterion": "Với fixture channels.status: fb-messenger có account running=true => state 'running' và accountCount đúng; configured nhưng không running => 'configured'; có kênh nhưng 0 account => 'installed'; không có fb-messenger => 'unavailable'."
+      },
+      {
+        "id": "AC-002",
+        "requirements": [
+          "REQ-005"
+        ],
+        "criterion": "host không có request, request reject, quá timeout, hoặc response không phải object => state 'unknown' kèm lý do ngắn, không ném lỗi ra ngoài; launcher vẫn render."
+      },
+      {
+        "id": "AC-003",
+        "requirements": [
+          "REQ-004",
+          "BR-002"
+        ],
+        "criterion": "Spy host.request ghi nhận đúng một method duy nhất 'channels.status' cho mỗi lần đọc; không method nào khác."
+      },
+      {
+        "id": "AC-004",
+        "requirements": [
+          "REQ-004",
+          "BR-003"
+        ],
+        "criterion": "Input giả chứa pageAccessToken/appSecret/botKey/verifyToken => JSON.stringify(output) không chứa các giá trị đó; output chỉ có khóa trong whitelist."
+      },
+      {
+        "id": "AC-005",
+        "requirements": [
+          "REQ-002",
+          "REQ-003",
+          "BR-005"
+        ],
+        "criterion": "Output connector có scope 'facebook-page' và nhãn chứa 'không phải Messenger cá nhân'; test URL hiện tại của inbox.test.mjs vẫn thấy https://www.messenger.com/."
+      },
+      {
+        "id": "AC-006",
+        "requirements": [
+          "REQ-005"
+        ],
+        "criterion": "Khi AbortSignal bị abort (view dispose) => hàm đọc trả 'unknown'/reject AbortError và không gọi callback cập nhật."
+      },
+      {
+        "id": "AC-007",
+        "requirements": [
+          "BR-001"
+        ],
+        "criterion": "Module connector không export hàm send/reply/connect; sau tích hợp DOM không có input/textarea/iframe/script/nút gửi."
+      }
+    ],
+    "assumptions": [
+      "Nghĩa của 'kết nối' trong plan này = hiển thị trạng thái chỉ đọc của kênh fb-messenger; không đồng bộ/hiển thị nội dung tin nhắn (chờ OQ-1).",
+      "View page nhận context.host có host.request như docs feature-plugins.md mô tả; cần xác minh ở TASK-001 vì mountInbox hiện chỉ nhận container.",
+      "'channels.status' cần scope operator.read và chấp nhận params rỗng hoặc tối thiểu; params chính xác chưa xác minh.",
+      "Connector viết JS thuần, không thêm dependency (repo không có bundler ngoài build.mjs copy file).",
+      "TASK-001: channels.status trả channelAccounts[channelId] là mảng account có enabled/configured/running/lifecycle; params {} được chấp nhận qua CLI."
+    ],
+    "openQuestions": [
+      "OQ-1: 'Kết nối Messenger' mong muốn ở mức nào: (a) chỉ trạng thái kênh fb-messenger (đề xuất của plan), (b) thêm danh sách hội thoại fb-messenger qua host.sessions và mở trong dock, hay (c) cấu hình/khởi động kênh từ trang (cần operator.admin, trái ràng buộc hiện tại)?",
+      "OQ-2: Có chấp nhận dùng plugin bên thứ ba fb-messenger (UNLICENSED; chế độ relay chuyển tin nhắn qua connect.monkeytech.vn) làm nguồn trạng thái không?",
+      "OQ-3: fb-messenger đang để dmPolicy='open', khi có account agent sẽ tự trả lời khách hàng của Page — trái nguyên tắc 'không gửi tự động' của Personal. Có cần cảnh báo trên thẻ không (plugin này không thay đổi cấu hình kênh)?",
+      "OQ-4: Xác nhận Messenger cá nhân tiếp tục chỉ là launcher (không tìm thấy plugin/API chính thức cho tài khoản cá nhân).",
+      "OQ-5: Ai sở hữu và hợp nhất thay đổi trên file chung src/control-ui.js, build.mjs, test/inbox.test.mjs (plan Email/Zalo cũng sẽ chạm)?"
+    ],
+    "blockers": [
+      "openclaw CLI không có trên PATH và node không có trong shell planner => chưa chạy 'openclaw plugins list', 'openclaw channels status --json', 'npm test'; hình dạng JSON của channels.status cho fb-messenger chưa xác minh (TASK-001).",
+      "Chưa xác minh page mount có nhận context.host.request trong OpenClaw 2026.11.3 (TASK-001)."
+    ],
+    "technicalSolution": "Luồng (chỉ đọc):\n1. Page 'inbox' mount -> UI gọi readMessengerStatus(context.host, {signal, timeoutMs: 8000}) từ src/connectors/messenger.js.\n2. Connector gọi DUY NHẤT host.request('channels.status', <params xác minh ở TASK-001>) với Promise.race timeout + AbortSignal.\n3. normalizeMessengerStatus(raw) (hàm thuần) tìm mục channel id 'fb-messenger' (không dò alias 'messenger' để tránh nhầm), đếm account và cờ enabled/configured/running theo hình dạng đã xác minh, trả object whitelist:\n   { channelId: 'fb-messenger', scope: 'facebook-page', state: 'unavailable'|'installed'|'configured'|'running'|'unknown', accountCount: number, runningCount: number, reason: string|null, label: string, disclaimer: 'Kênh Facebook Page/Instagram (plugin bên thứ ba), không phải Messenger cá nhân.' }\n   Thứ tự quyết định: không có mục => unavailable; 0 account => installed; có account nhưng runningCount=0 => configured; runningCount>0 => running; lỗi/sai dạng => unknown.\n4. UI (file chung, TASK-004) render chip trạng thái + disclaimer bằng textContent trên thẻ Messenger, giữ link messenger.com; trạng thái unknown có nút 'Thử lại' gọi lại bước 1. Không có nút gửi/kết nối.\n\nDữ liệu: không có bảng/DB mới, không lưu trạng thái lâu dài, không cache secret. Không thêm operation/event/tool backend (src/index.js giữ nguyên) vì host.request ở browser đủ cho RPC chỉ đọc; nếu TASK-001 cho thấy page không có host.request thì dừng và quay lại planner (phương án thay thế là operation backend, đổi src/index.js + contract, ngoài phạm vi sở hữu).\n\nAPI: chỉ 'channels.status' (operator.read). Cấm theo BR-002 mọi RPC ghi/admin.\n\nBuild: build.mjs hiện chỉ copy 3 file; dist/control-ui/index.js import './connectors/messenger.js' sẽ hỏng nếu không copy src/connectors/messenger.js -> dist/control-ui/connectors/messenger.js (TASK-004, file chung). Manifest openclaw.plugin.json không đổi (controlUi.entry vẫn là dist/control-ui/index.js); cần xác minh host cho phép import tương đối từ entry (TASK-001/TASK-005).\n\nMigration/rollback: không migration. Rollback = revert commit tích hợp TASK-004 (thẻ quay về launcher tĩnh); connector độc lập không ảnh hưởng runtime khi không được import. Bản cài trong ~/.openclaw không đổi cho tới khi người dùng chủ động build/pack/update.",
+    "tasks": [
+      {
+        "id": "TASK-001",
+        "title": "Xác minh nguồn kênh Messenger và hình dạng channels.status (không sửa code)",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Mọi task sau phụ thuộc hình dạng response và khả năng host.request trong page; tránh code theo giả định.",
+        "requirements": [
+          "REQ-001",
+          "REQ-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002"
+        ],
+        "inScope": "Chạy trên Gateway host: 'openclaw plugins list', 'openclaw channels list --all --json', 'openclaw channels status --json' (chỉ đọc); ghi lại mục fb-messenger đã che secret; xác nhận context.host.request có trong page mount và params của channels.status (docs plugin-sdk control-ui/sdk-subpaths).",
+        "outOfScope": "Cấu hình account fb-messenger, channels.start, đổi openclaw.json, cài/gỡ plugin.",
+        "dependencies": [],
+        "approach": "1. Bổ sung openclaw/node vào PATH hoặc dùng đường dẫn tuyệt đối node_modules/openclaw/openclaw.mjs. 2. Chạy 3 lệnh chỉ đọc, lưu output đã che token vào ghi chú bàn giao. 3. Đọc docs/plugins/sdk-subpaths.md mục control-ui để xác nhận chữ ký mount(container, context) và host.request(method, params). 4. Cập nhật assumptions/blockers của plan nếu khác.",
+        "test": "Bằng chứng: output lệnh (đã che secret) cho thấy có/không có mục fb-messenger và tên trường account/running thật.",
+        "doneWhen": "Có fixture JSON thật (đã che) cho 2 trường hợp tối thiểu (kênh có mặt chưa account; không có kênh) và xác nhận chữ ký host.request; blocker tương ứng được gỡ hoặc ghi là chặn.",
+        "filesToChange": [],
+        "result": "Đã xác minh (chỉ đọc). `openclaw plugins list`: Facebook Messenger / fb-messenger / enabled / 0.3.1 (bên thứ ba, Page/Instagram). `openclaw channels list --all --json`: chat.fb-messenger = {accounts:['default'], installed:true, origin:'configured'}. `openclaw channels status --json`: channelAccounts['fb-messenger'][0] = {accountId:'default',enabled:true,configured:true,running:false,lifecycle:'recovering',restartPending:true,lastError:'channel exited without an error'}; channelOrder gồm 'fb-messenger'. Chữ ký host.request(method, params) xác minh trong node_modules/openclaw/dist/plugin-sdk/feature-contract.js; mount nhận context.host (docs/plugins/feature-plugins.md). Khác plan: máy thật có 1 tài khoản nên trạng thái hiện tại là 'configured' (không phải 'installed'). Chưa chứng minh scope operator.read riêng cho channels.status."
+      },
+      {
+        "id": "TASK-002",
+        "title": "Connector chỉ đọc src/connectors/messenger.js",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Lõi tính năng, nơi áp ràng buộc không credential/không gửi.",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-004",
+          "REQ-005",
+          "BR-002",
+          "BR-003",
+          "BR-004",
+          "BR-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004",
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "inScope": "Export MESSENGER_CHANNEL_ID, normalizeMessengerStatus(raw), readMessengerStatus(host,{signal,timeoutMs}); whitelist output; timeout và abort; không DOM, không dependency.",
+        "outOfScope": "Render DOM, sửa control-ui.js/build.mjs, liệt kê session, gửi tin, operation backend.",
+        "dependencies": [
+          "TASK-001"
+        ],
+        "approach": "1. Hằng channel id 'fb-messenger', scope 'facebook-page', disclaimer tiếng Việt. 2. normalizeMessengerStatus thuần, chịu input null/sai kiểu, đọc trường theo fixture TASK-001, dựng object mới chỉ với khóa whitelist. 3. readMessengerStatus: nếu typeof host?.request!=='function' => unknown; gọi host.request('channels.status', params) với race timeout và signal; abort => không trả state cập nhật; lỗi => unknown + reason ngắn không chứa nội dung lỗi thô có thể lộ dữ liệu. 4. Không export send/connect/start.",
+        "test": "Chạy test/messenger.test.mjs (TASK-003).",
+        "doneWhen": "Tất cả AC-001..AC-007 phần connector pass trong 'npm test'.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/messenger.js",
+            "changes": "Tạo mới: connector chỉ đọc trạng thái kênh fb-messenger."
+          }
+        ],
+        "result": "Tạo src/connectors/messenger.ts (TypeScript, thay cho messenger.js vì repo đã chuyển sang React + TS): normalizeMessengerStatus thuần, readMessengerStatus (một RPC channels.status, timeout 8s, abort), output chỉ 8 khóa whitelist, scope 'facebook-page', disclaimer 'không phải Messenger cá nhân'; không export send/reply/connect/start. Kiểm tra bằng test/messenger.test.mjs (AC-001..007) pass."
+      },
+      {
+        "id": "TASK-003",
+        "title": "Test đơn vị test/messenger.test.mjs",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Khóa ràng buộc bảo mật/trung thực bằng test tự động.",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-004",
+          "REQ-005",
+          "BR-002",
+          "BR-003",
+          "BR-004"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004",
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "inScope": "node:test với fixture nhúng (dựa trên TASK-001) và host giả có spy request.",
+        "outOfScope": "Test DOM của inbox (file chung, TASK-004), test e2e Gateway thật.",
+        "dependencies": [
+          "TASK-002"
+        ],
+        "approach": "1. Bảng fixture: running, configured, installed(0 account), unavailable, sai dạng, null. 2. Host giả: thiếu request; request reject; request treo (timeout nhỏ); abort giữa chừng. 3. Spy method name == ['channels.status']. 4. Fixture chứa pageAccessToken/appSecret/botKey/verifyToken giả => assert không có trong JSON.stringify(output) và Object.keys(output) ⊆ whitelist. 5. Assert scope 'facebook-page', disclaimer chứa 'không phải Messenger cá nhân', module không có export send/connect/start.",
+        "test": "'npm test' => mọi test messenger pass; 3 test inbox hiện có vẫn pass trước khi tích hợp.",
+        "doneWhen": "Output 'npm test' thật được ghi lại, 0 fail.",
+        "filesToChange": [
+          {
+            "path": "test/messenger.test.mjs",
+            "changes": "Tạo mới: test connector Messenger."
+          }
+        ],
+        "result": "Tạo test/messenger.test.mjs (9 test): bảng trạng thái, whitelist và không lộ bí mật (pageAccessToken/appSecret/botKey/verifyToken/lastError), chỉ gọi channels.status, lỗi/thiếu request/timeout/sai dạng -> unknown, abort, không có export gửi, UI chip/Thử lại/dispose. `npm test` -> 27/27 pass (inbox 3, zalo 7, email 9, messenger 9... tổng 27 gồm helper test)."
+      },
+      {
+        "id": "TASK-004",
+        "title": "Tích hợp trạng thái vào thẻ Messenger (file chung, cần điều phối)",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P1",
+        "priorityReason": "Cần để người dùng thấy kết quả nhưng chạm file chung với plan Email/Zalo.",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-003",
+          "REQ-005",
+          "BR-001",
+          "BR-003",
+          "BR-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-002",
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "inScope": "Thẻ Messenger nhận state từ connector, chip trạng thái + disclaimer + nút 'Thử lại' khi unknown; truyền context.host vào mountInbox; abort khi dispose; build copy connector sang dist.",
+        "outOfScope": "Thẻ Email/Zalo, bố cục 2 vùng DESIGN.md §6, danh sách hội thoại, README/DESIGN/VERIFICATION (chỉ cập nhật khi được yêu cầu).",
+        "dependencies": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "approach": "1. Chờ quyết định OQ-5 (người hợp nhất file chung). 2. src/control-ui.js: mountInbox(container, context) dùng context?.host; chỉ thẻ id 'messenger' gọi readMessengerStatus; render bằng textContent; AbortController hủy khi dispose. 3. build.mjs: thêm copy src/connectors/messenger.js -> dist/control-ui/connectors/messenger.js. 4. test/inbox.test.mjs: cập nhật assertion chip (thẻ Messenger không còn cố định 'Chưa kết nối vào trang'), thêm case host giả không có request vẫn render 4 link.",
+        "test": "'npm test', 'npm run build', kiểm tra dist/control-ui/connectors/messenger.js tồn tại; test DOM: không input/textarea/iframe/script, link messenger.com giữ nguyên.",
+        "doneWhen": "npm test + build pass và người sở hữu file chung duyệt diff.",
+        "filesToChange": [
+          {
+            "path": "src/control-ui.js",
+            "changes": "File chung: nối connector vào thẻ Messenger."
+          },
+          {
+            "path": "build.mjs",
+            "changes": "File chung: copy connector sang dist/control-ui/connectors/."
+          },
+          {
+            "path": "test/inbox.test.mjs",
+            "changes": "File chung: điều chỉnh assertion chip và thêm case host không có request."
+          }
+        ],
+        "result": "Tạo src/connectors/MessengerStatus.tsx và nối vào thẻ Messenger trong src/control-ui.tsx (dùng context.host, không có host thì giữ nhãn tĩnh, link messenger.com giữ nguyên, abort khi unmount), CSS openclaw-personal__messenger-*. build.mjs đã bundle nên không cần copy module (blocker B file chung gỡ nhờ esbuild bundle ở plan trước). Ảnh: docs/plans/messenger-integration/evidence/TASK-004-before.png, docs/plans/messenger-integration/evidence/TASK-004-after.png (thẻ Messenger 'Đã cấu hình, chưa chạy', '1 tài khoản, 0 đang chạy.', disclaimer, link giữ nguyên; dữ liệu channels.status thật). API: host.request('channels.status', {}) -> JSON thật như TASK-001; chưa gọi WebSocket Gateway từ trình duyệt thật. Thẻ Zalo và Messenger mỗi thẻ gọi channels.status một lần (2 RPC chỉ đọc mỗi lần mở trang)."
+      },
+      {
+        "id": "TASK-005",
+        "title": "Xác minh build, validate và hiển thị trên Control UI",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P1",
+        "priorityReason": "Cần bằng chứng thật trước khi báo DONE; desktop rendering hiện chưa xác minh.",
+        "requirements": [
+          "REQ-001",
+          "REQ-003",
+          "REQ-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-005"
+        ],
+        "inScope": "npm test, npm run build, 'openclaw plugins build --root .', 'npm run validate'; mở trang Personal với Custom plugin UI bật, quan sát thẻ Messenger ở trạng thái hiện tại (dự kiến 'installed' vì 0 account).",
+        "outOfScope": "Cài/cập nhật bản plugin đã cài (chỉ khi người dùng yêu cầu), cấu hình fb-messenger.",
+        "dependencies": [
+          "TASK-004"
+        ],
+        "approach": "1. Chạy lệnh kiểm tra, lưu output. 2. Nếu người dùng cho phép, pack và cài thử; nếu không, ghi rõ 'chưa xác minh trên desktop'. 3. Đối chiếu trạng thái hiển thị với 'openclaw channels status'.",
+        "test": "Trạng thái trên thẻ khớp output CLI; tắt Gateway/thiếu quyền => thẻ 'không xác định' + Thử lại, launcher vẫn mở được.",
+        "doneWhen": "Có output lệnh thật; phần không chạy được ghi rõ là chưa xác minh.",
+        "filesToChange": [],
+        "result": "`npm test` 27/27, `npm run build` ok, `openclaw plugins build --root .` + `openclaw plugins validate --json` -> valid:true. Trạng thái hiển thị khớp CLI (configured, not running). Gateway lỗi -> thẻ 'Không xác định' + Thử lại, launcher vẫn mở: ảnh docs/plans/messenger-integration/evidence/TASK-005-before.png và docs/plans/messenger-integration/evidence/TASK-005-after.png (Chrome headless, host giả). Chưa xác minh trên Control UI thật: plugin chưa được cài vào OpenClaw và cần bạn đồng ý cài (sửa hệ thống ngoài). Cập nhật README/DESIGN/VERIFICATION."
+      }
+    ],
+    "executionOrder": [
+      "TASK-001",
+      "TASK-002",
+      "TASK-003",
+      "TASK-004",
+      "TASK-005"
+    ],
+    "traceability": [
+      {
+        "requirement": "REQ-001",
+        "acceptanceCriteria": [
+          "AC-001"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-002",
+          "TASK-003",
+          "TASK-004",
+          "TASK-005"
+        ],
+        "test": "test/messenger.test.mjs: bảng fixture 4 trạng thái; TASK-005 đối chiếu CLI",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-002",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "test/messenger.test.mjs: scope 'facebook-page' + disclaimer",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-003",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-004",
+          "TASK-005"
+        ],
+        "test": "test/inbox.test.mjs: URL messenger.com giữ nguyên",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-004",
+        "acceptanceCriteria": [
+          "AC-003",
+          "AC-004"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "test/messenger.test.mjs: spy method + secret không rò",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-005",
+        "acceptanceCriteria": [
+          "AC-002",
+          "AC-006"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-002",
+          "TASK-003",
+          "TASK-004",
+          "TASK-005"
+        ],
+        "test": "test/messenger.test.mjs: thiếu request/reject/timeout/abort; test/inbox.test.mjs: host không có request",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-001",
+        "acceptanceCriteria": [
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "Không export send/connect; DOM không có nút gửi/input",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-002",
+        "acceptanceCriteria": [
+          "AC-003"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "Spy host.request chỉ 'channels.status'",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-003",
+        "acceptanceCriteria": [
+          "AC-004"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "Whitelist khóa output",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-004",
+        "acceptanceCriteria": [
+          "AC-001"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "configured không thành running",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-005",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "Disclaimer + nhãn plugin bên thứ ba",
+        "result": "Chưa chạy"
+      }
+    ],
+    "remainingRisks": [
+      "fb-messenger là plugin bên thứ ba (UNLICENSED), có thể đổi hình dạng status hoặc bị gỡ; connector phải về 'unknown'/'unavailable' an toàn.",
+      "Plugin API OpenClaw là experimental; chữ ký host.request/page mount có thể đổi giữa phiên bản (pin 2026.11.3).",
+      "Người dùng có thể hiểu nhầm trạng thái kênh Page là Messenger cá nhân nếu disclaimer bị lược trong UI.",
+      "Khi fb-messenger có account với dmPolicy 'open', agent tự trả lời khách hàng Page; Personal không kiểm soát việc này (OQ-3).",
+      "Chế độ relay đưa nội dung tin nhắn qua connect.monkeytech.vn (bên thứ ba) — rủi ro riêng tư nằm ngoài plugin này (OQ-2).",
+      "Xung đột hợp nhất trên src/control-ui.js/build.mjs/test/inbox.test.mjs với plan Email/Zalo (OQ-5)."
+    ],
+    "currentState_update": "Máy hiện có fb-messenger configured=true, running=false, lifecycle='recovering' (không còn 0 account).",
+    "status": "CHO_KIEM_TRA"
+  },
+  "status": "CHO_KIEM_TRA"
+}

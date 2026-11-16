@@ -1,0 +1,28 @@
+.op-shell{display:flex;height:calc(100% + 2 * var(--op-shell-y,0px));min-height:560px;margin:calc(-1 * var(--op-shell-y,0px)) calc(-1 * var(--op-shell-x,0px));color:var(--text,inherit)}
+.op-shell__nav{flex:none;width:260px;padding:8px 12px 12px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--border,#7776);overflow:auto}
+.op-shell__nav button{background:none!important;border:0!important;outline-offset:2px;color:inherit;font:inherit;cursor:pointer;box-shadow:none}
+.op-shell__row{display:flex;align-items:center}
+.op-shell__nav .op-shell__item{flex:1;display:flex;align-items:center;gap:14px;padding:10px 14px;font-size:15px;line-height:24px;text-align:left;opacity:.85}
+.op-shell__nav .op-shell__item:hover,.op-shell__nav .op-shell__cat:hover{opacity:1}
+.op-shell__nav .op-shell__item[data-active=true],.op-shell__nav .op-shell__cat[data-active=true]{opacity:1;font-weight:600;color:#b5402f}
+.op-shell__nav .op-shell__chev{padding:4px 8px;font-size:14px;opacity:.6}
+.op-shell__logo{display:grid;place-items:center;width:32px;height:24px}
+.op-shell__logo img{width:24px;height:24px;object-fit:contain}
+.op-shell__label{flex:1}
+.op-shell__dot{width:8px;height:8px;border-radius:50%;background:#d6d3d1}
+.op-shell__cats{list-style:none;margin:0 0 6px;padding:0}
+.op-shell__nav .op-shell__cat{display:block;width:100%;display:flex;align-items:center;gap:10px;padding:8px 14px 8px 46px;font-size:13px;text-align:left;opacity:.75}
+.op-shell__nav .op-shell__cat[data-danger=true]{color:#b5402f}
+.op-shell__body{flex:1;min-width:0;display:flex;flex-direction:column}
+.op-shell__dot[data-on=true]{background:#10b981}
+.op-shell__nav .op-shell__cat--action{opacity:1;font-weight:600;color:#b5402f}
+.op-shell__ico{flex:none;opacity:.85}
+.op-shell__linked{margin:auto;max-width:460px;padding:24px;text-align:center}
+.op-shell__linked h2{margin:0 0 8px;font-size:18px}
+.op-shell__linked p{margin:0 0 10px;font-size:13px;line-height:1.6}
+.op-shell__linked-note{color:#78716c}
+.op-shell .op-shell__btn{min-height:28px;padding:0 12px;border:1px solid #d6d3d1;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer}
+.op-shell__acc-ava{flex:none;width:18px;height:18px;border-radius:50%;object-fit:cover;display:grid;place-items:center;background:#78716c;color:#fff;font-size:10px;font-weight:600}
+.op-shell__nav .op-shell__acc{padding-left:46px}
+.op-shell__acc-error{margin:0;padding:4px 14px 4px 46px;font-size:12px;color:#b5402f}
+.op-shell__nav a.op-shell__cat{text-decoration:none}

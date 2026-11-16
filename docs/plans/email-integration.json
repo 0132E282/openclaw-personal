@@ -1,0 +1,511 @@
+{
+  "title": "Kết nối thẻ Email của openclaw-personal với tích hợp email sẵn có của OpenClaw",
+  "description": "Kế hoạch đọc (chỉ đọc) trạng thái các tích hợp email đã có trong OpenClaw 2026.11.3 (Gmail PubSub hook, plugin imap) và hiển thị trung thực trong thẻ Email; Outlook giữ launcher. Không lưu mật khẩu, không gửi, không gọi API nhà cung cấp trực tiếp.",
+  "tags": [
+    "email",
+    "gmail",
+    "outlook",
+    "imap",
+    "hooks",
+    "feature-plugin",
+    "control-ui"
+  ],
+  "createdAt": "2026-11-15",
+  "content": {
+    "meta": {
+      "goal": "Thẻ Email trong trang 'inbox' của plugin openclaw-personal phản ánh đúng các tích hợp email mà OpenClaw đã cung cấp và người dùng đã cấu hình (Gmail PubSub, IMAP), thông qua một operation chỉ đọc, không chạm thông tin bí mật và không gửi thư.",
+      "scope": "Trong phạm vi: module src/connectors/email.js (đọc trạng thái từ config snapshot), src/connectors/email.ui.js (render khối trạng thái), test/email.test.mjs; một điểm móc tối thiểu ở các file dùng chung (src/index.js, src/control-ui.js, build.mjs) cần điều phối. Ngoài phạm vi: tự triển khai OAuth/đồng bộ Gmail API/Microsoft Graph (lộ trình pha 1-4 trong VERIFICATION.md), ghi/sửa config OpenClaw, cài gog/himalaya, bật plugin imap, Zalo, Messenger.",
+      "currentState": "Plugin là launcher thuần (README.md, src/control-ui.js): thẻ Email có 2 link Gmail/Outlook, backend src/index.js có contract operations/events rỗng, contracts.tools rỗng. build.mjs chỉ copy 3 file (src/index.js, src/control-ui.js, src/control-ui.css), không bundle. Baseline: node --test test/*.test.mjs = 3/3 pass (Node v24.21.0, chạy ngày 2026-11-15). Bản cài OpenClaw 2026.11.3 (847611d) tại ~/.openclaw/runtime/.../openclaw; package openclaw-personal chưa được cài (bản cài là 'personal-inbox').",
+      "verifiedOpenClawEmailSurfaces": [
+        "Gmail PubSub hook (core Gateway, không phải plugin riêng): config hooks.enabled, hooks.presets ['gmail'], hooks.gmail.account; CLI 'openclaw webhooks gmail setup --account <addr>'; phụ thuộc CLI gog (OAuth Google) + Google Pub/Sub; chỉ chiều vào (dispatch thư tới agent), không gửi. Nguồn: docs/automation/cron-jobs/gmail.md, docs/gateway/config-hooks.md trong bản cài.",
+        "Plugin stock 'imap' (@openclaw/imap, 'IMAP email trigger'): đang disabled; config plugins.entries.imap.config.accounts.<id> với host/user/password (secretInput hoặc SecretRef)/allowedSenders/agentId; không gửi thư, không đổi cờ. Nguồn: openclaw plugins list --json, dist/extensions/imap/openclaw.plugin.json, docs/automation/imap.md.",
+        "Skill 'gog' (Gmail qua OAuth, có lệnh send) và skill 'himalaya' (IMAP/SMTP): là skill cho agent, không phải plugin; CLI gog/himalaya chưa cài trên máy (which: not found).",
+        "Outlook/Microsoft Graph: KHÔNG có plugin/channel stock trong 'openclaw plugins list' (plugin 'microsoft' là speech). Docs chỉ nêu 'outlook' như ví dụ MCP server do người dùng tự cấu hình (mcp.servers) — không phải tích hợp có sẵn; chưa xác minh MCP Outlook nào.",
+        "Không có channel email trong docs/channels của bản cài.",
+        "Config cục bộ hiện tại: hooks.gmail chưa có, plugins.entries.imap chưa có, mcp.servers rỗng (đọc khóa, không đọc giá trị bí mật)."
+      ],
+      "ownership": {
+        "ownedByThisPlan": [
+          "src/connectors/email.js",
+          "src/connectors/email.ui.js",
+          "test/email.test.mjs"
+        ],
+        "sharedNeedsCoordination": [
+          "src/index.js",
+          "src/control-ui.js",
+          "build.mjs",
+          "README.md",
+          "VERIFICATION.md",
+          "DESIGN.md"
+        ],
+        "notTouched": [
+          "openclaw.plugin.json",
+          "test/inbox.test.mjs",
+          "src/control-ui.css",
+          "các file connector Zalo/Messenger"
+        ]
+      }
+    },
+    "requirements": [
+      {
+        "id": "REQ-001",
+        "title": "Phát hiện trạng thái tích hợp email sẵn có của OpenClaw",
+        "description": "Backend đọc config snapshot OpenClaw và xác định: Gmail PubSub (hooks.enabled, preset gmail, hooks.gmail.account có hay không) và plugin imap (enabled, số tài khoản cấu hình). Chỉ báo 'đã cấu hình', không khẳng định đang chạy.",
+        "source": "Yêu cầu người dùng (kết nối với plugin/channel Email đã có); bề mặt xác minh trong meta.verifiedOpenClawEmailSurfaces"
+      },
+      {
+        "id": "REQ-002",
+        "title": "Operation chỉ đọc email.status",
+        "description": "Khai báo operation kind 'query' id 'email.status' trong feature contract, input rỗng, output JSON có schema giới hạn; không khai báo tool cho agent.",
+        "source": "VERIFICATION.md mục 2, 6 (UI chỉ gọi operations, contracts.tools giữ rỗng); docs/plugins/feature-plugins.md"
+      },
+      {
+        "id": "REQ-003",
+        "title": "Hiển thị trạng thái trong thẻ Email",
+        "description": "Thẻ Email hiển thị từng nguồn (Gmail PubSub, IMAP, Outlook) với trạng thái trung thực và hướng dẫn cấu hình qua quy trình chính thức của OpenClaw (lệnh CLI/tài liệu dạng văn bản). Giữ nguyên 2 link launcher.",
+        "source": "DESIGN.md mục 1, 4, 6; yêu cầu người dùng"
+      },
+      {
+        "id": "REQ-004",
+        "title": "Outlook giữ launcher",
+        "description": "Do không có tích hợp Outlook sẵn có trong OpenClaw đã xác minh, Outlook hiển thị 'Chưa có tích hợp OpenClaw đã xác minh — dùng link mở trang'.",
+        "source": "Kết quả khảo sát openclaw plugins list; README.md (No working account connector is claimed)"
+      },
+      {
+        "id": "REQ-005",
+        "title": "Lỗi/không xác định hiển thị trung thực",
+        "description": "Khi operation lỗi, thiếu quyền operator.read, hoặc host không cung cấp request, khối trạng thái hiển thị 'Không xác định được trạng thái' và không làm hỏng phần launcher.",
+        "source": "DESIGN.md mục 1 (Trung thực), mục 6 (trạng thái lỗi)"
+      }
+    ],
+    "businessRules": [
+      {
+        "id": "BR-001",
+        "rule": "Chỉ dùng tích hợp/API chính thức: plugin không gọi trực tiếp Gmail API/Graph, không scrape, không nhúng iframe; chỉ đọc config OpenClaw qua api.config / api.runtime.config.current().",
+        "source": "Yêu cầu người dùng; VERIFICATION.md mục 1"
+      },
+      {
+        "id": "BR-002",
+        "rule": "Không lưu và không trả về mật khẩu/token/SecretRef: output không chứa password, SecretRef (source/provider/id), pushToken, hooks.token; plugin không thêm trường config bí mật; không gợi ý nhập mật khẩu vào UI.",
+        "source": "Yêu cầu người dùng; VERIFICATION.md mục 7"
+      },
+      {
+        "id": "BR-003",
+        "rule": "Không gửi tự động: không có operation gửi, không khai báo tool, contracts.tools giữ [].",
+        "source": "Yêu cầu người dùng; VERIFICATION.md mục 5-6"
+      },
+      {
+        "id": "BR-004",
+        "rule": "Chỉ đọc hệ thống ngoài: không config.patch/config.set, không bật plugin imap, không chạy 'openclaw webhooks gmail setup' từ plugin.",
+        "source": "CLAUDE.md (Modify external systems only when explicitly requested)"
+      },
+      {
+        "id": "BR-005",
+        "rule": "IMAP dùng mật khẩu (app password) nên chỉ được báo trạng thái, không được plugin khuyến nghị như đường kết nối mặc định.",
+        "source": "Ràng buộc không lưu mật khẩu; dist/extensions/imap/openclaw.plugin.json (accounts.*.password)"
+      }
+    ],
+    "acceptanceCriteria": [
+      {
+        "id": "AC-001",
+        "requirement": "REQ-001",
+        "criterion": "Với config {hooks:{enabled:true,presets:['gmail'],gmail:{account:'a@x.com'}}}, readEmailStatus trả gmailPubSub.state='configured'; thiếu hooks.enabled hoặc thiếu gmail.account trả 'not-configured'; không có trường nào khẳng định 'running'."
+      },
+      {
+        "id": "AC-002",
+        "requirement": "REQ-001",
+        "criterion": "Với plugins.entries.imap.enabled=true và 2 accounts, trả imap.state='configured', imap.accountCount=2; enabled false/không có entry trả 'disabled'/'not-configured'."
+      },
+      {
+        "id": "AC-003",
+        "requirement": "BR-002",
+        "criterion": "Với config chứa password chuỗi, SecretRef, hooks.token, hooks.gmail.pushToken: JSON.stringify(output) không chứa bất kỳ giá trị đó nào và không chứa khóa 'password', 'token', 'secret'."
+      },
+      {
+        "id": "AC-004",
+        "requirement": "REQ-002",
+        "criterion": "Contract có operation 'email.status' kind 'query', không có trường tool; output khớp schema (additionalProperties false); contracts.tools trong openclaw.plugin.json vẫn []."
+      },
+      {
+        "id": "AC-005",
+        "requirement": "REQ-003",
+        "criterion": "Render với status giả: thẻ Email có 3 dòng nguồn (Gmail PubSub, IMAP, Outlook) với text trạng thái đúng; mọi text dùng textContent; không tạo input/textarea/iframe/script; 2 link launcher giữ nguyên; test/inbox.test.mjs vẫn 3/3 pass."
+      },
+      {
+        "id": "AC-006",
+        "requirement": "REQ-004",
+        "criterion": "Dòng Outlook luôn hiện 'Chưa có tích hợp OpenClaw đã xác minh' bất kể config."
+      },
+      {
+        "id": "AC-007",
+        "requirement": "REQ-005",
+        "criterion": "Khi host.request reject hoặc không tồn tại, khối hiển thị 'Không xác định được trạng thái'; dispose sau khi view bị hủy không ném lỗi và không cập nhật DOM đã gỡ (kiểm tra signal.aborted)."
+      },
+      {
+        "id": "AC-008",
+        "requirement": "BR-003",
+        "criterion": "Không có operation kind 'action' nào liên quan email; grep src/connectors/email.* không có 'send', 'config.patch', 'config.set', 'fetch('."
+      }
+    ],
+    "assumptions": [
+      "Đường dẫn plan do người dùng chỉ định (docs/plans/email-integration.json) được ưu tiên hơn quy ước <slug>-<yyyyMMdd>.json.",
+      "Feature plugin đọc được config qua api.config / api.runtime.config.current() (docs/plugins/sdk-runtime.md); giả định snapshot chứa hooks.* và plugins.entries.imap.* dạng đã resolve hoặc thô — module chỉ đọc khóa/kiểu, không đọc giá trị bí mật.",
+      "Hình dạng config lấy từ docs bản cài 2026.11.3: hooks.enabled, hooks.presets, hooks.gmail.account, plugins.entries.imap.enabled, plugins.entries.imap.config.accounts. Đổi phiên bản OpenClaw có thể đổi khóa (API experimental).",
+      "Không trả địa chỉ hooks.gmail.account ra UI (chỉ boolean) để tối thiểu PII; đổi nếu người dùng muốn hiển thị (OQ-2).",
+      "Trạng thái là 'đã cấu hình', không phải 'đang chạy': chưa tìm thấy API công khai cho feature plugin đọc health watcher Gmail/IMAP.",
+      "Browser gọi operation qua context.host.request('plugins.sessionAction', {pluginId, actionId, payload}) — đúng transport mà createFeatureClient dùng (dist/plugin-sdk/feature-contract.js) — để không cần bundle import 'openclaw/...' vào browser."
+    ],
+    "openQuestions": [
+      "OQ-1: Ai sở hữu và hợp nhất các file dùng chung src/index.js, src/control-ui.js, build.mjs (cả 3 plan Email/Zalo/Messenger đều cần móc vào)? Đề xuất: agent điều phối áp dụng TASK-004 sau khi 3 plan xong phần riêng.",
+      "OQ-2: Có hiển thị địa chỉ Gmail đã cấu hình (hooks.gmail.account) cho operator không, hay chỉ 'đã cấu hình'?",
+      "OQ-3: Có cần liên kết tới các phiên agent do hook email tạo (session key hook:gmail:*, hook:imap:*) qua host.sessions không? Chưa đưa vào phạm vi.",
+      "OQ-4: Mục tiêu dài hạn vẫn là connector OAuth riêng (VERIFICATION.md pha 1-4) hay chỉ dựa vào tích hợp sẵn có của OpenClaw? Plan này không triển khai OAuth riêng.",
+      "OQ-5: Có muốn cập nhật README.md/VERIFICATION.md mục 11/DESIGN.md sau khi xong? VERIFICATION.md đang có thay đổi chưa commit của người dùng."
+    ],
+    "blockers": [
+      "B-1 (chặn TASK-004): build.mjs chỉ copy 3 file, không bundle; import tương đối từ dist/index.js và dist/control-ui/index.js sang module connectors sẽ hỏng nếu build không copy thêm. Chưa xác minh host có phục vụ file JS ngoài controlUi.entry đã khai báo cho native UI hay không -> cần chọn: (a) build copy src/connectors/* vào cả dist/connectors và dist/control-ui/connectors rồi kiểm chứng tải được trong Control UI, hoặc (b) dùng esbuild (đã có trong devDependencies nhưng chưa cài node_modules) để bundle. Cần quyết định của chủ file build.mjs.",
+      "B-2 (chặn kiểm chứng end-to-end): node_modules chưa cài, CLI 'openclaw' không có trên PATH (chỉ có ~/.openclaw/bin/openclaw); package openclaw-personal chưa được cài vào OpenClaw — kiểm tra hiển thị thật cần build/pack/cài do người dùng cho phép."
+    ],
+    "technicalSolution": "1. Luồng\n   Control UI page 'inbox' -> mountInbox(container, context) -> email.ui.js mountEmailStatus(slot, context)\n   -> context.host.request('plugins.sessionAction', {pluginId:'openclaw-personal', actionId:'email.status', payload:{}})\n   -> Gateway kiểm scope operator.read -> feature-plugin handler -> readEmailStatus(api.runtime.config.current() ?? api.config)\n   -> JSON đã validate theo output schema -> UI render bằng textContent.\n   Không có chiều gửi; không gọi mạng ra ngoài; không ghi config.\n\n2. Module src/connectors/email.js (thuần JS, không import Node/openclaw, chạy được cả backend lẫn test)\n   - export const EMAIL_STATUS_OPERATION_ID = 'email.status'\n   - export const emailStatusOperation = {kind:'query', description:'Trạng thái chỉ đọc của tích hợp email sẵn có trong OpenClaw', input:{type:'object',additionalProperties:false,properties:{}}, output:<schema>} (không có trường tool)\n   - output schema: {type:'object', additionalProperties:false, required:['gmailPubSub','imap','outlook'], properties:{\n       gmailPubSub:{state: enum['configured','not-configured','unknown'], hooksEnabled:boolean, presetEnabled:boolean},\n       imap:{state: enum['configured','disabled','not-configured','unknown'], accountCount: integer 0..100},\n       outlook:{state: const 'launcher-only'} }}\n   - export function readEmailStatus(config): đọc theo optional chaining, try/catch trả 'unknown'; KHÔNG sao chép bất kỳ giá trị chuỗi nào từ config vào output (chỉ boolean/đếm/enum) => đảm bảo BR-002 theo cấu trúc.\n   - export function createEmailStatusHandler(api): trả async () => readEmailStatus(api.runtime?.config?.current?.() ?? api.config).\n\n3. Module src/connectors/email.ui.js (browser, không import)\n   - export function mountEmailStatus(slot, context): tạo <ul class='openclaw-personal__email-status'> 3 <li> (Gmail PubSub, IMAP, Outlook), trạng thái ban đầu 'Đang kiểm tra…'; gọi host.request nếu có; khi xong kiểm context.signal?.aborted trước khi ghi DOM; lỗi -> 'Không xác định được trạng thái'. Trả {dispose}.\n   - Bảng nhãn (vi): configured='Đã cấu hình trong OpenClaw (không xác nhận đang chạy)'; not-configured='Chưa cấu hình — xem: openclaw webhooks gmail setup' (Gmail) / 'Chưa cấu hình (plugin imap dùng mật khẩu ứng dụng, không khuyến nghị)' (IMAP); disabled='Plugin imap đang tắt'; launcher-only='Chưa có tích hợp OpenClaw đã xác minh — dùng nút mở trang'.\n   - Class tiền tố openclaw-personal__ (DESIGN.md mục 1); không thêm CSS mới ở plan này (src/control-ui.css không thuộc sở hữu) — dùng class có sẵn openclaw-personal__note nếu cần kiểu.\n\n4. Điểm móc vào file dùng chung (TASK-004, cần điều phối, mỗi file chỉ thêm tối thiểu)\n   - src/index.js: import {EMAIL_STATUS_OPERATION_ID, emailStatusOperation, createEmailStatusHandler} from './connectors/email.js'; operations:{[EMAIL_STATUS_OPERATION_ID]: emailStatusOperation}; setup(api){return {[EMAIL_STATUS_OPERATION_ID]: createEmailStatusHandler(api)};}. events giữ {}.\n   - src/control-ui.js: mountInbox(container, context) truyền context; với service.id==='email' tạo 1 slot div sau .openclaw-personal__links và gọi mountEmailStatus(slot, context); dispose gọi dispose của email trước root.remove(). Không đổi chuỗi trạng thái 'Chưa kết nối vào trang' (inbox test đang khóa) — hoặc nếu đổi thì cập nhật inbox test trong cùng task do chủ file làm.\n   - build.mjs: theo quyết định B-1.\n\n5. Dữ liệu / migration / rollback\n   - Không có bảng, không migration, không lưu trạng thái (YAGNI). Rollback = revert 3 file email + điểm móc; không có dữ liệu cần dọn.\n\n6. Kiểm thử\n   - test/email.test.mjs (node:test, chỉ import src/connectors/email*.js, dùng DOM giả như test/inbox.test.mjs): bảng config mẫu cho AC-001..003, kiểm schema/contract AC-004, render AC-005..007, quét mã nguồn AC-008.\n   - Lệnh: node --test test/*.test.mjs (Node v24 qua nvm; 'node' không có trên PATH mặc định của shell agent).",
+    "tasks": [
+      {
+        "id": "TASK-001",
+        "title": "Module readEmailStatus và contract 'email.status' chỉ đọc, không lộ bí mật",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Nền cho mọi task khác; chứa ràng buộc bảo mật BR-002/BR-003.",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-004",
+          "BR-001",
+          "BR-002",
+          "BR-003"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004",
+          "AC-006",
+          "AC-008"
+        ],
+        "inScope": "Hàm thuần readEmailStatus(config), schema input/output, emailStatusOperation (kind query, không tool), createEmailStatusHandler(api).",
+        "outOfScope": "Gọi Gmail API/Graph, đọc health watcher, ghi config, operation gửi.",
+        "dependencies": [],
+        "approach": "1. Tạo src/connectors/email.js không import gì. 2. Định nghĩa schema output (additionalProperties:false, chỉ enum/boolean/integer). 3. readEmailStatus đọc hooks.enabled, hooks.presets.includes('gmail'), Boolean(hooks.gmail?.account), plugins.entries.imap.enabled, Object.keys(plugins.entries.imap.config.accounts).length (giới hạn 100); bọc try/catch -> 'unknown'. 4. outlook luôn 'launcher-only'. 5. createEmailStatusHandler ưu tiên api.runtime.config.current(), fallback api.config.",
+        "test": "Bảng config mẫu: rỗng; Gmail đầy đủ; Gmail thiếu enabled; imap enabled 2 accounts; imap disabled; config chứa password 'P@ss', SecretRef {source:'store',provider:'default',id:'IMAP_PASSWORD'}, hooks.token 'HT', pushToken 'PT'; config có getter ném lỗi. Kỳ vọng theo AC-001/002/003/006, lỗi -> 'unknown'.",
+        "doneWhen": "test/email.test.mjs phần backend pass; JSON output không chứa giá trị bí mật mẫu.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/email.js",
+            "changes": "Tạo mới: EMAIL_STATUS_OPERATION_ID, emailStatusOperation, readEmailStatus, createEmailStatusHandler."
+          }
+        ],
+        "result": "Tạo src/connectors/email.ts (TypeScript): EMAIL_STATUS_OPERATION_ID, readEmailStatus (chỉ enum/boolean/đếm, không chép chuỗi từ config, try/catch -> 'unknown'), createEmailStatusHandler (ưu tiên api.runtime.config.current(), fallback api.config). Contract email.status (kind 'query', không tool, schema TypeBox additionalProperties:false) khai báo trong src/index.js, thêm phụ thuộc typebox. Kiểm tra: test/email.test.mjs AC-001..004 (config rỗng, Gmail đủ/thiếu, imap 2 tài khoản/tắt, password/SecretRef/token mẫu không xuất hiện, getter ném lỗi) pass; dist/index.js nạp được; openclaw.plugin.json contracts.tools vẫn []. API (chưa chạy trên Gateway vì plugin chưa cài): operation email.status, input {}, output mẫu {\"gmailPubSub\":{\"state\":\"not-configured\",\"hooksEnabled\":false,\"presetEnabled\":false},\"imap\":{\"state\":\"not-configured\",\"accountCount\":0},\"outlook\":{\"state\":\"launcher-only\"}}; không có header/token."
+      },
+      {
+        "id": "TASK-002",
+        "title": "Khối hiển thị trạng thái email trong thẻ Email (browser)",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P1",
+        "priorityReason": "Hiện thực hóa REQ-003 cho người dùng; phụ thuộc hình dạng output của TASK-001.",
+        "requirements": [
+          "REQ-003",
+          "REQ-004",
+          "REQ-005",
+          "BR-002",
+          "BR-005"
+        ],
+        "acceptanceCriteria": [
+          "AC-005",
+          "AC-006",
+          "AC-007"
+        ],
+        "inScope": "mountEmailStatus(slot, context): render 3 dòng, gọi host.request('plugins.sessionAction'), xử lý lỗi/abort, dispose.",
+        "outOfScope": "Sửa CSS, đổi chuỗi/đếm node hiện có của inbox, form nhập thông tin đăng nhập, nút cấu hình/ghi config.",
+        "dependencies": [
+          "TASK-001"
+        ],
+        "approach": "1. Tạo src/connectors/email.ui.js không import (hoặc chỉ import nhãn/ID từ ./email.js nếu B-1 cho phép). 2. Dựng <ul>/<li> bằng ownerDocument.createElement + textContent. 3. Trạng thái 'Đang kiểm tra…' -> kết quả/nhãn lỗi. 4. Kiểm context.signal?.aborted và cờ disposed trước khi ghi DOM. 5. Không có host.request -> 'Không xác định được trạng thái'.",
+        "test": "DOM giả như test/inbox.test.mjs; host giả resolve {ok:true,result:<status>} / reject / thiếu request; abort trước khi resolve. Kỳ vọng 3 li, nhãn đúng, không input/textarea/iframe/script, không ghi DOM sau dispose.",
+        "doneWhen": "test/email.test.mjs phần UI pass.",
+        "filesToChange": [
+          {
+            "path": "src/connectors/email.ui.js",
+            "changes": "Tạo mới: mountEmailStatus(slot, context) và bảng nhãn tiếng Việt."
+          }
+        ],
+        "result": "Tạo component React src/connectors/EmailStatus.tsx (thay cho email.ui.js): 3 dòng Gmail PubSub/IMAP/Outlook, 'Đang kiểm tra…', lỗi/sai dạng -> 'Không xác định được trạng thái', bỏ kết quả khi unmount, gọi host.request('plugins.sessionAction', {pluginId, actionId:'email.status', payload:{}}). Kiểm tra: test AC-005..007 pass. Ảnh: docs/plans/email-integration/evidence/TASK-002-before.png và docs/plans/email-integration/evidence/TASK-002-after.png (thẻ Email với 3 dòng trạng thái, dữ liệu mẫu 'chưa cấu hình')."
+      },
+      {
+        "id": "TASK-003",
+        "title": "Bộ test email",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P0",
+        "priorityReason": "Bằng chứng cho AC; chạy độc lập không cần node_modules.",
+        "requirements": [
+          "REQ-001",
+          "REQ-002",
+          "REQ-003",
+          "REQ-004",
+          "REQ-005",
+          "BR-002",
+          "BR-003"
+        ],
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002",
+          "AC-003",
+          "AC-004",
+          "AC-005",
+          "AC-006",
+          "AC-007",
+          "AC-008"
+        ],
+        "inScope": "test/email.test.mjs với node:test, chỉ import src/connectors/email*.js; quét mã nguồn email.* cho AC-008.",
+        "outOfScope": "Test tích hợp với Gateway thật; sửa test/inbox.test.mjs.",
+        "dependencies": [
+          "TASK-001",
+          "TASK-002"
+        ],
+        "approach": "1. Viết test theo bảng ở TASK-001/002. 2. Test AC-008 đọc file src/connectors/email.js, email.ui.js bằng fs và assert không có 'send', 'config.patch', 'config.set', 'fetch('. 3. Chạy toàn bộ node --test test/*.test.mjs.",
+        "test": "node --test test/*.test.mjs: test cũ 3/3 + test email mới đều pass.",
+        "doneWhen": "Toàn bộ test pass, có output lệnh làm bằng chứng.",
+        "filesToChange": [
+          {
+            "path": "test/email.test.mjs",
+            "changes": "Tạo mới: test backend status, bảo mật, contract, UI render/lỗi/abort, quét mã."
+          }
+        ],
+        "result": "Tạo test/email.test.mjs (9 test) và test/_load.mjs (biên dịch TS bằng esbuild để test); quét mã AC-008. `npm test` -> 19/19 pass (gồm inbox 3/3, zalo 7/7, email 9/9). Không có thay đổi hiển thị nên không có ảnh."
+      },
+      {
+        "id": "TASK-004",
+        "title": "Móc module email vào backend/UI/build (file dùng chung, cần điều phối)",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P1",
+        "priorityReason": "Không có bước này thì tính năng không xuất hiện; nhưng chạm file dùng chung với plan Zalo/Messenger.",
+        "requirements": [
+          "REQ-002",
+          "REQ-003",
+          "BR-003"
+        ],
+        "acceptanceCriteria": [
+          "AC-004",
+          "AC-005"
+        ],
+        "inScope": "Thêm operation vào contract src/index.js, truyền context và mount email status trong src/control-ui.js, build xuất module connectors theo quyết định B-1.",
+        "outOfScope": "Thêm operation khác, đổi manifest/contracts.tools, sửa phần Zalo/Messenger, đổi CSS.",
+        "dependencies": [
+          "TASK-001",
+          "TASK-002",
+          "TASK-003"
+        ],
+        "approach": "BLOCKED đến khi OQ-1 và B-1 được trả lời. 1. src/index.js: import và đăng ký 'email.status' + handler. 2. src/control-ui.js: mountInbox(container, context), slot cho thẻ email, dispose. 3. build.mjs: copy/bundle connectors. 4. npm run build; kiểm dist chứa module và import tương đối đúng. 5. Chạy lại toàn bộ test.",
+        "test": "node --test test/*.test.mjs pass; node build.mjs thành công; (khi được phép) openclaw plugins validate --json OK; kiểm tra thủ công trong Control UI: thẻ Email hiển thị 3 dòng trạng thái, khớp config thật (hiện cả hai 'chưa cấu hình').",
+        "doneWhen": "Build/test/validate pass và có kiểm tra hiển thị thực tế hoặc ghi rõ chưa kiểm được.",
+        "filesToChange": [
+          {
+            "path": "src/index.js",
+            "changes": "[DÙNG CHUNG] thêm operation email.status vào contract và handler trong setup."
+          },
+          {
+            "path": "src/control-ui.js",
+            "changes": "[DÙNG CHUNG] nhận context, mount khối trạng thái email trong thẻ email, dispose."
+          },
+          {
+            "path": "build.mjs",
+            "changes": "[DÙNG CHUNG] xuất src/connectors/* vào dist theo quyết định B-1."
+          }
+        ],
+        "result": "Nối vào file dùng chung: src/index.js (đăng ký operation email.status + handler trong setup), src/control-ui.tsx (mountInbox(container, context), EmailStatus trong thẻ Email), build.mjs (esbuild bundle UI và backend, backend bundle cả typebox, external openclaw/*). `npm run build`, `npm test` 19/19, `openclaw plugins build --root .` + `validate` -> valid:true. Ảnh: docs/plans/email-integration/evidence/TASK-004-before.png, docs/plans/email-integration/evidence/TASK-004-after.png. Chưa kiểm tra trong Control UI thật (plugin chưa cài); chưa xác nhận hình dạng api.runtime.config/api.config thật, handler đã phòng thủ cả hai."
+      },
+      {
+        "id": "TASK-005",
+        "title": "Cập nhật tài liệu cho trạng thái email (tùy chọn)",
+        "status": "CHO_KIEM_TRA",
+        "priority": "P2",
+        "priorityReason": "Giữ tài liệu trung thực; chỉ làm khi người dùng đồng ý (OQ-5).",
+        "requirements": [
+          "REQ-003",
+          "REQ-004"
+        ],
+        "acceptanceCriteria": [
+          "AC-005",
+          "AC-006"
+        ],
+        "inScope": "README.md mục Current features/Develop, VERIFICATION.md mục 11, DESIGN.md mục 4/6 mô tả khối trạng thái email chỉ đọc.",
+        "outOfScope": "Viết lại HLD, thay đổi khác của người dùng trong VERIFICATION.md.",
+        "dependencies": [
+          "TASK-004"
+        ],
+        "approach": "Chỉ thêm câu mô tả; không xóa nội dung hiện có; phối hợp với thay đổi chưa commit trong VERIFICATION.md.",
+        "test": "Đọc lại và đối chiếu với hành vi thực tế sau TASK-004.",
+        "doneWhen": "Người dùng duyệt nội dung tài liệu.",
+        "filesToChange": [
+          {
+            "path": "README.md",
+            "changes": "[DÙNG CHUNG] mô tả trạng thái email chỉ đọc."
+          },
+          {
+            "path": "VERIFICATION.md",
+            "changes": "[DÙNG CHUNG, có thay đổi chưa commit] cập nhật mục 11 kết quả xác minh."
+          },
+          {
+            "path": "DESIGN.md",
+            "changes": "[DÙNG CHUNG] thêm thành phần khối trạng thái email."
+          }
+        ],
+        "result": "Cập nhật README.md, DESIGN.md (khối trạng thái Email), VERIFICATION.md mục 11 (thêm cuối, không xóa), cùng description manifest; validate pass. Không có thay đổi hiển thị trực tiếp nên không có ảnh. Chờ người dùng duyệt nội dung."
+      }
+    ],
+    "executionOrder": [
+      "TASK-001",
+      "TASK-002",
+      "TASK-003",
+      "TASK-004",
+      "TASK-005"
+    ],
+    "traceability": [
+      {
+        "requirement": "REQ-001",
+        "acceptanceCriteria": [
+          "AC-001",
+          "AC-002"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003"
+        ],
+        "test": "test/email.test.mjs: bảng config Gmail/IMAP",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-002",
+        "acceptanceCriteria": [
+          "AC-004"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "Kiểm operation kind query, không tool, schema; manifest contracts.tools []",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-003",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003",
+          "TASK-004",
+          "TASK-005"
+        ],
+        "test": "Render DOM giả + inbox test vẫn pass + kiểm tra thủ công Control UI",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-004",
+        "acceptanceCriteria": [
+          "AC-006"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "Dòng Outlook luôn 'launcher-only'",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "REQ-005",
+        "acceptanceCriteria": [
+          "AC-007"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "host reject/thiếu request/abort",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-001",
+        "acceptanceCriteria": [
+          "AC-008"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003"
+        ],
+        "test": "Quét mã: không fetch(",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-002",
+        "acceptanceCriteria": [
+          "AC-003"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "Output không chứa giá trị bí mật mẫu/khóa password|token|secret",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-003",
+        "acceptanceCriteria": [
+          "AC-004",
+          "AC-008"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003",
+          "TASK-004"
+        ],
+        "test": "Không operation action/tool; quét 'send'",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-004",
+        "acceptanceCriteria": [
+          "AC-008"
+        ],
+        "tasks": [
+          "TASK-001",
+          "TASK-003"
+        ],
+        "test": "Quét mã: không config.patch/config.set",
+        "result": "Chưa chạy"
+      },
+      {
+        "requirement": "BR-005",
+        "acceptanceCriteria": [
+          "AC-005"
+        ],
+        "tasks": [
+          "TASK-002",
+          "TASK-003"
+        ],
+        "test": "Nhãn IMAP not-configured ghi rõ 'không khuyến nghị'",
+        "result": "Chưa chạy"
+      }
+    ],
+    "remainingRisks": [
+      "Plugin API OpenClaw là experimental: khóa config (hooks.gmail, plugins.entries.imap) hoặc transport plugins.sessionAction có thể đổi giữa các phiên bản; peerDependency >=2026.11.3 không khóa trên.",
+      "'Đã cấu hình' không đồng nghĩa watcher đang chạy hoặc OAuth gog còn hiệu lực; người dùng có thể hiểu nhầm nếu nhãn không rõ.",
+      "api.config có thể đã redact/resolve SecretRef theo cách chưa xác minh; thiết kế không sao chép chuỗi nào từ config nên vẫn an toàn, nhưng accountCount có thể sai nếu cấu trúc khác.",
+      "Native plugin UI chạy với quyền operator; host.request có thể gọi mọi method — module email chỉ gọi plugins.sessionAction với actionId cố định, cần review.",
+      "Xung đột file dùng chung với plan Zalo/Messenger (src/index.js, src/control-ui.js, build.mjs) nếu không có người điều phối hợp nhất.",
+      "Chưa kiểm chứng hiển thị thực tế: openclaw-personal chưa được cài vào OpenClaw (bản cài là personal-inbox)."
+    ],
+    "status": "CHO_KIEM_TRA"
+  },
+  "status": "CHO_KIEM_TRA"
+}

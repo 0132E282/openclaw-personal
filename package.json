@@ -5,8 +5,10 @@
   "private": true,
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/*.test.mjs",
-    "validate": "openclaw plugins validate --json"
+    "test": "node build.mjs && node --test test/*.test.mjs",
+    "build:core": "cargo build --release --manifest-path core/Cargo.toml",
+    "validate": "openclaw plugins validate --json",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "files": [
     "dist",
@@ -28,11 +30,22 @@
     }
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^31.0.1",
+    "typescript": "^7.0.2"
   },
   "description": "Personal communication hub for OpenClaw: email and social service launchers.",
   "repository": {
     "type": "git",
     "url": "https://github.com/0132E282/openclaw-personal.git"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typebox": "^1.4.7"
   }
 }

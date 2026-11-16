@@ -1,4 +1,10 @@
-import {mkdir,copyFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {build} from 'esbuild';
 await mkdir(new URL('dist/control-ui/',import.meta.url),{recursive:true});
-for(const [src,dest] of [['src/index.js','dist/index.js'],['src/control-ui.js','dist/control-ui/index.js'],['src/control-ui.css','dist/control-ui/index.css']])await copyFile(new URL(src,import.meta.url),new URL(dest,import.meta.url));
-console.log('Built dependency-free precompiled native UI.');
+const common={bundle:true,format:'esm',minify:true,target:'es2022',logLevel:'warning'};
+await build({...common,entryPoints:['src/control-ui.tsx'],outfile:'dist/control-ui/index.js',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'}});
+await build({...common,entryPoints:['src/index.js'],outfile:'dist/index.js',platform:'node',external:['openclaw/*']});
+const cssFiles=['src/control-ui.css','src/ui/shell.css','src/ui/email/email.css','src/ui/chat/chat.css','src/ui/setup/setup.css','src/ui/notify/notify.css'];
+const css=await Promise.all(cssFiles.map(f=>readFile(new URL(f,import.meta.url),'utf8')));
+await writeFile(new URL('dist/control-ui/index.css',import.meta.url),css.join('\n'));
+console.log('Built precompiled React native UI and backend.');

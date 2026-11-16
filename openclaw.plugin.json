@@ -1,7 +1,7 @@
 {
   "id": "openclaw-personal",
   "name": "Personal",
-  "description": "Official web launchers only. No inbox sync or sending.",
+  "description": "Personal hub: Gmail (OAuth), Zalo and Messenger status, with setup guidance.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
