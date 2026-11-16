@@ -1,6 +1,6 @@
 //! MỌI selector/đoạn JS đọc giao diện Facebook nằm ở đây, kèm phần chuẩn hóa dữ liệu thô (thuần, test được).
 //! Facebook đổi giao diện thì chỉ sửa file này. LƯU Ý: các selector dưới đây là nỗ lực tốt nhất theo cấu trúc
-//! đã biết của https://www.facebook.com/messages/ và CHƯA được kiểm chứng trên trang thật.
+//! đã biết của https://www.facebook.com/messages/; LIST_JS và MESSAGES_JS đã đối chiếu với DOM thật (tiếng Việt).
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -28,7 +28,7 @@ pub const PROBE_JS: &str = r#"(() => {
     url: location.href,
     complete: document.readyState === 'complete',
     loginForm: !!document.querySelector('input[name="pass"], form[action*="login"]'),
-    list: !!document.querySelector('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"], div[role="navigation"]'),
+    list: !!document.querySelector('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"], [role="grid"], [role="tablist"]'),
     composer: !!document.querySelector('div[role="textbox"][contenteditable="true"]'),
     pin: /\bPIN\b/i.test(dlg) && /(end-to-end|đầu-cuối|đầu cuối)/i.test(dlg),
   });
@@ -47,28 +47,56 @@ pub const LIST_JS: &str = r#"(() => {
     const spans = [...a.querySelectorAll('span[dir="auto"]')];
     const bold = spans.length > 1 && spans.slice(1).some(s => parseInt(getComputedStyle(s).fontWeight, 10) >= 600);
     const unread = !!a.querySelector('[aria-label*="nread"], [aria-label*="chưa đọc"]') || bold;
-    rows.push({href, lines, unread, avatars: a.querySelectorAll('img, image').length});
+    let avatar = '';
+    for (const im of a.querySelectorAll('img, image')) {
+      const u = im.getAttribute('src') || im.getAttribute('xlink:href') || im.getAttribute('href') || '';
+      if (/^https:\/\//i.test(u) && u.length <= 600) { avatar = u; break; }
+    }
+    rows.push({href, lines, unread, avatar, avatars: a.querySelectorAll('img, image').length});
     if (rows.length >= 120) break;
   }
-  return JSON.stringify({ready: links.length > 0 || !!document.querySelector('div[role="navigation"]'), rows});
+  return JSON.stringify({ready: links.length > 0 || !!document.querySelector('[role="grid"], [role="tablist"]'), rows});
 })()"#;
 
-/// Đọc tin của hội thoại đang mở: các hàng `role="row"` trong khung chính; tin của mình nằm lệch phải.
+/// Đọc tin của hội thoại đang mở (đã kiểm chứng trên DOM thật của facebook.com/messages/t/<id>): khung tin là
+/// `div[role="log"]`; mỗi tin là `[data-scope="messages_table"][data-message-id]` (còn `aria-label` dạng
+/// "<thời gian>, <người gửi>: <nội dung>", tùy ngôn ngữ nên chỉ dùng để rút nhãn thời gian). Các phần tử
+/// `data-scope="messages_table"` KHÔNG có `data-message-id` là dòng phân cách giờ/tiêu đề, bỏ qua.
+/// Tin của mình: thanh `role="toolbar"` (nút phản hồi/biểu cảm) nằm bên TRÁI bong bóng, của đối phương nằm bên phải.
+/// Người gửi: `h4` đầu cụm tin của đối phương (các tin liền sau không có `h4` nên lấy lại tên gần nhất).
+/// `loading`: còn thanh `role="progressbar"` trong khung chính; `composer`: ô soạn đã có.
 pub const MESSAGES_JS: &str = r#"(() => {
-  const main = document.querySelector('div[role="main"]');
-  if (!main) return JSON.stringify({ready: false, rows: []});
-  const box = main.getBoundingClientRect();
-  const mid = box.left + box.width / 2;
+  const main = document.querySelector('[role="main"]');
+  const loading = !!(main && main.querySelector('[role="progressbar"]'));
+  const log = document.querySelector('[role="log"]');
+  if (!log) return JSON.stringify({ready: false, loading, composer: false, rows: []});
+  const lr = log.getBoundingClientRect();
   const out = [];
-  for (const r of [...main.querySelectorAll('div[role="row"]')].slice(-150)) {
-    const parts = [...r.querySelectorAll('div[dir="auto"]')];
-    const text = parts.map(p => (p.innerText || '').trim()).filter(Boolean).join('\n');
-    if (!text) continue;
-    const rc = (parts[0] || r).getBoundingClientRect();
-    const head = r.querySelector('h4, h5');
-    out.push({text, mine: rc.left + rc.width / 2 > mid + box.width * 0.1, sender: head ? (head.innerText || '').trim() : ''});
+  let last = '';
+  for (const m of [...log.querySelectorAll('[data-scope="messages_table"][data-message-id]')].slice(-150)) {
+    const h = m.querySelector('h4, h5');
+    const head = h ? (h.innerText || '').trim() : '';
+    const clone = m.cloneNode(true);
+    clone.querySelectorAll('h4, h5, [role="toolbar"]').forEach(n => n.remove());
+    const text = (clone.textContent || '').trim();
+    const mr = m.getBoundingClientRect();
+    const bar = m.querySelector('[role="toolbar"]');
+    const br = bar ? bar.getBoundingClientRect() : null;
+    let mine;
+    if (br && br.width > 0) {
+      mine = br.left < mr.left + mr.width / 2;
+    } else {
+      const b = (m.querySelector('span div[role="none"], span div[role="presentation"]') || m).getBoundingClientRect();
+      mine = b.left + b.width / 2 > lr.left + lr.width * 0.6;
+    }
+    if (!mine && head) last = head;
+    const label = m.getAttribute('aria-label') || '';
+    const pre = text && label.endsWith(text) ? label.slice(0, label.length - text.length) : label;
+    const cut = pre.replace(/[:\s]+$/, '');
+    const i = cut.lastIndexOf(', ');
+    out.push({text, mine, sender: mine ? '' : (head || last), time: i > 0 ? cut.slice(0, i) : ''});
   }
-  return JSON.stringify({ready: true, rows: out});
+  return JSON.stringify({ready: true, loading, composer: !!document.querySelector('div[role="textbox"][contenteditable="true"]'), rows: out});
 })()"#;
 
 /// Ô soạn đã rỗng chưa (xác nhận tin đã gửi đi).
@@ -96,11 +124,13 @@ pub struct Conversation {
     pub time: String,
     pub unread: bool,
     pub is_group: bool,
+    /// URL https ảnh đại diện (fbcdn/facebook); rỗng nếu không có.
+    pub avatar: String,
 }
 
 impl Conversation {
     pub fn to_json(&self) -> Value {
-        json!({"id": self.id, "title": self.title, "snippet": self.snippet, "time": self.time, "unread": self.unread, "isGroup": self.is_group})
+        json!({"id": self.id, "title": self.title, "snippet": self.snippet, "time": self.time, "unread": self.unread, "isGroup": self.is_group, "avatar": self.avatar})
     }
 }
 
@@ -165,6 +195,25 @@ pub struct ParsedList {
     pub e2ee_hidden: usize,
 }
 
+const MAX_AVATAR: usize = 600;
+
+/// Chỉ nhận URL https tới host `*.fbcdn.net`, `*.facebook.com` hoặc chứa `scontent`; còn lại (data:, blob:, host lạ) -> rỗng.
+/// URL dài quá `MAX_AVATAR` bị bỏ (cắt giữa chừng sẽ hỏng chữ ký).
+pub fn avatar_url(raw: &str) -> String {
+    let u = raw.trim();
+    let Some(rest) = u.strip_prefix("https://") else { return String::new() };
+    if u.len() > MAX_AVATAR || u.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return String::new();
+    }
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = rest[..host_end].to_ascii_lowercase();
+    if host.is_empty() || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
+        return String::new();
+    }
+    let ok = host.ends_with(".fbcdn.net") || host.ends_with(".facebook.com") || host.contains("scontent");
+    if ok { u.to_string() } else { String::new() }
+}
+
 /// Chuẩn hóa kết quả `LIST_JS`. `Err(SelectorBroken)` khi dữ liệu sai dạng hoặc trang chưa có khung danh sách.
 pub fn parse_conversations(raw: &str) -> Result<ParsedList, Reason> {
     let v: Value = serde_json::from_str(raw).map_err(|_| Reason::SelectorBroken)?;
@@ -196,6 +245,7 @@ pub fn parse_conversations(raw: &str) -> Result<ParsedList, Reason> {
             snippet: clip(&snippet, MAX_SNIPPET),
             time: clip(&time, MAX_TIME),
             unread: row.get("unread").and_then(Value::as_bool).unwrap_or(false),
+            avatar: avatar_url(row.get("avatar").and_then(Value::as_str).unwrap_or("")),
             is_group: row.get("avatars").and_then(Value::as_u64).unwrap_or(0) > 1,
         });
         if out.len() >= MAX_CONVERSATIONS {
@@ -205,8 +255,15 @@ pub fn parse_conversations(raw: &str) -> Result<ParsedList, Reason> {
     Ok(ParsedList { conversations: out, e2ee_hidden: hidden })
 }
 
+pub struct ParsedMessages {
+    pub messages: Vec<Message>,
+    /// Trang còn đang tải (thanh tiến trình trong khung chính).
+    pub loading: bool,
+}
+
 /// Chuẩn hóa kết quả `MESSAGES_JS`; giữ tối đa `MAX_MESSAGES` tin cuối theo thứ tự cũ -> mới.
-pub fn parse_messages(raw: &str) -> Result<Vec<Message>, Reason> {
+/// `Err(SelectorBroken)` khi dữ liệu sai dạng hoặc chưa có khung tin (`ready:false`).
+pub fn parse_messages_page(raw: &str) -> Result<ParsedMessages, Reason> {
     let v: Value = serde_json::from_str(raw).map_err(|_| Reason::SelectorBroken)?;
     if v.get("ready").and_then(Value::as_bool) != Some(true) {
         return Err(Reason::SelectorBroken);
@@ -230,7 +287,12 @@ pub fn parse_messages(raw: &str) -> Result<Vec<Message>, Reason> {
         });
     }
     let skip = out.len().saturating_sub(MAX_MESSAGES);
-    Ok(out.split_off(skip))
+    Ok(ParsedMessages { messages: out.split_off(skip), loading: v.get("loading").and_then(Value::as_bool).unwrap_or(false) })
+}
+
+/// Như `parse_messages_page` nhưng chỉ lấy danh sách tin.
+pub fn parse_messages(raw: &str) -> Result<Vec<Message>, Reason> {
+    parse_messages_page(raw).map(|p| p.messages)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

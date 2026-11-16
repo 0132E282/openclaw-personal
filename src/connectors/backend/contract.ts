@@ -49,6 +49,8 @@ const conversation = Type.Object(
   time: Type.String({maxLength: 40}),
   unread: Type.Boolean(),
   isGroup: Type.Boolean(),
+  /** URL https ảnh đại diện (fbcdn/facebook); rỗng nếu không có. */
+  avatar: Type.String({maxLength: 600}),
  },
  strict,
 );

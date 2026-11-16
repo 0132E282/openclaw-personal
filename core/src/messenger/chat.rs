@@ -191,7 +191,10 @@ impl MessengerChat {
             Err(_) => Err(Reason::Timeout),
         };
         let r = self.settle(&mut g, r).await?;
-        g.convs = Some((Instant::now(), r.conversations.clone(), r.e2ee_hidden));
+        // Không cache danh sách rỗng để lần sau đọc lại ngay thay vì giữ kết quả rỗng do trang chưa tải xong.
+        if !r.conversations.is_empty() {
+            g.convs = Some((Instant::now(), r.conversations.clone(), r.e2ee_hidden));
+        }
         Ok(filter_folder(&r.conversations, folder, r.e2ee_hidden))
     }
 
@@ -273,7 +276,8 @@ impl MessengerChat {
             if e.is_auth() {
                 *self.expired.lock().unwrap() = Some(e);
             }
-            if e.is_auth() || matches!(e, Reason::Timeout | Reason::LaunchFailed) {
+            // Trang kẹt (timeout/không thấy khung) thì đóng phiên để lần sau mở Chrome mới thay vì giữ trang hỏng mãi.
+            if e.is_auth() || matches!(e, Reason::Timeout | Reason::LaunchFailed | Reason::SelectorBroken) {
                 g.close().await;
             }
             return Err(e);
@@ -287,9 +291,34 @@ impl MessengerChat {
         if !page.url().await.map_err(reason_of)?.starts_with(selectors::MESSAGES_URL.trim_end_matches('/')) {
             page.goto(selectors::MESSAGES_URL).await.map_err(reason_of)?;
         }
-        self.wait_ready(page, false, |p| p.list).await?;
-        let raw = page.eval(selectors::LIST_JS).await.map_err(reason_of)?;
-        let parsed = selectors::parse_conversations(&raw)?;
+        // Có lúc trang chỉ dừng ở khung chờ (khung điều hướng + các ô xám, chưa có danh sách) mãi không vẽ xong:
+        // thử nhanh một lần, nếu chưa có thì tải lại trang một lần rồi chờ đủ lâu.
+        match self.wait_ready_within(page, false, |p| p.list, self.cfg.ready_timeout / 2).await {
+            Ok(_) => {}
+            Err(Reason::Timeout | Reason::SelectorBroken) => {
+                page.goto(selectors::MESSAGES_URL).await.map_err(reason_of)?;
+                if let Err(e) = self.wait_ready(page, false, |p| p.list).await {
+                    let path = page.url().await.ok().map(|u| u.split(['?', '#']).next().unwrap_or("").to_string()).unwrap_or_default();
+                    eprintln!("[messenger] conversations: trang không có danh sách sau khi tải lại (url={path} reason={})", e.as_str());
+                    return Err(e);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+        // Khung điều hướng xuất hiện trước các dòng hội thoại: đọc lại tới khi số dòng ổn định.
+        let mut parsed = selectors::parse_conversations(&page.eval(selectors::LIST_JS).await.map_err(reason_of)?)?;
+        let deadline = Instant::now() + self.cfg.ready_timeout;
+        let mut stable = 0;
+        while stable < 2 && Instant::now() < deadline {
+            sleep(self.cfg.ready_poll).await;
+            let Ok(raw) = page.eval(selectors::LIST_JS).await else { continue };
+            let Ok(next) = selectors::parse_conversations(&raw) else { continue };
+            let same = next.conversations.len() == parsed.conversations.len() && next.e2ee_hidden == parsed.e2ee_hidden;
+            // Danh sách rỗng chưa chắc là rỗng thật: có thể trang chưa vẽ xong, nên chưa tính là ổn định.
+            let empty = next.conversations.is_empty() && next.e2ee_hidden == 0;
+            stable = if same && !empty { stable + 1 } else { 0 };
+            parsed = next;
+        }
         Ok(ConversationList { conversations: parsed.conversations, e2ee_hidden: parsed.e2ee_hidden })
     }
 
@@ -308,8 +337,56 @@ impl MessengerChat {
         self.prepare(g, launcher, store).await?;
         let page = g.session.as_mut().expect("prepare đã mở phiên").as_mut();
         self.open_thread(page, id).await?;
-        let raw = page.eval(selectors::MESSAGES_JS).await.map_err(reason_of)?;
-        selectors::parse_messages(&raw)
+        self.read_messages(page).await
+    }
+
+    /// Đọc tin. Facebook vẽ danh sách dần (có lúc mới thấy 1 tin), nên chỉ chấp nhận kết quả khi trang đã tải xong và
+    /// kết quả giống hệt `STABLE_POLLS` lần poll liên tiếp; danh sách RỖNG cũng phải ổn định như vậy.
+    /// Hết giờ: còn đang tải -> `Timeout`, thiếu khung tin -> `SelectorBroken` (kèm một dòng chẩn đoán trên stderr,
+    /// không có nội dung tin: chỉ đường dẫn URL và cờ trạng thái).
+    async fn read_messages(&self, page: &mut dyn ChatPage) -> Result<Vec<Message>, Reason> {
+        const STABLE_POLLS: usize = 5;
+        let deadline = Instant::now() + self.cfg.ready_timeout;
+        let mut stable = 0;
+        let mut prev: Option<(usize, String)> = None;
+        let (mut loading, mut seen_log, mut evals_ok) = (false, false, false);
+        let mut best: Vec<Message> = Vec::new();
+        loop {
+            // Lỗi eval giữa lúc chuyển trang là bình thường: thử lại tới hạn chót.
+            if let Ok(raw) = page.eval(selectors::MESSAGES_JS).await {
+                evals_ok = true;
+                match selectors::parse_messages_page(&raw) {
+                    Ok(p) => {
+                        seen_log = true;
+                        loading = p.loading;
+                        let key = (p.messages.len(), p.messages.last().map(|m| m.id.clone()).unwrap_or_default());
+                        if !p.loading && prev.as_ref() == Some(&key) {
+                            stable += 1;
+                        } else {
+                            stable = 1;
+                        }
+                        prev = Some(key);
+                        best = p.messages;
+                        if !loading && stable >= STABLE_POLLS {
+                            return Ok(best);
+                        }
+                    }
+                    Err(_) => {
+                        stable = 0;
+                        prev = None;
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                if seen_log && !loading && !best.is_empty() {
+                    return Ok(best);
+                }
+                let path = page.url().await.ok().map(|u| u.split(['?', '#']).next().unwrap_or("").to_string()).unwrap_or_default();
+                eprintln!("[messenger] read_messages: không đọc được tin (url={path} log={seen_log} loading={loading} eval_ok={evals_ok})");
+                return Err(if loading { Reason::Timeout } else { Reason::SelectorBroken });
+            }
+            sleep(self.cfg.ready_poll).await;
+        }
     }
 
     async fn do_send(&self, g: &mut Inner, launcher: &dyn PageLauncher, store: &CookieStore, id: &str, text: &str) -> Result<(), Reason> {
@@ -338,7 +415,11 @@ impl MessengerChat {
     /// Chờ trang tải xong và thỏa `need`; trả lý do nếu đăng nhập hết hạn/checkpoint/PIN. Hết giờ: chưa tải xong
     /// -> `Timeout`; tải xong mà thiếu phần tử cần đọc -> `SelectorBroken`.
     async fn wait_ready(&self, page: &mut dyn ChatPage, thread: bool, need: fn(&Probe) -> bool) -> Result<Probe, Reason> {
-        let deadline = Instant::now() + self.cfg.ready_timeout;
+        self.wait_ready_within(page, thread, need, self.cfg.ready_timeout).await
+    }
+
+    async fn wait_ready_within(&self, page: &mut dyn ChatPage, thread: bool, need: fn(&Probe) -> bool, within: Duration) -> Result<Probe, Reason> {
+        let deadline = Instant::now() + within;
         let mut loaded = false;
         loop {
             // Lỗi eval giữa lúc đang chuyển trang là bình thường: thử lại tới hạn chót.

@@ -125,7 +125,7 @@ export function createHostZaloProvider(host: PluginHost, accountId: string = DEF
 
 // ---- Messenger ----
 
-const MESSENGER_ACCOUNT = {id: 'messenger', name: 'Messenger'};
+export const MESSENGER_ACCOUNT = {id: 'messenger', name: 'Messenger'};
 const MESSENGER_REASON_TEXT: Record<string, string> = {
  'not-logged-in': 'Phiên đăng nhập Facebook đã hết hạn. Hãy kết nối lại Messenger.',
  checkpoint: 'Facebook đang yêu cầu xác minh bảo mật (checkpoint). Xác minh trên Facebook rồi kết nối lại Messenger.',
@@ -167,6 +167,9 @@ interface MessengerResult {ok: boolean; reason?: string}
  * Chỉ hỗ trợ văn bản; chưa có ảnh/tệp, chat mã hóa đầu-cuối, tin chờ/đã chặn/spam.
  * `onAuthLost` được gọi khi Facebook báo cookie hết hạn/checkpoint để shell kiểm tra lại trạng thái kết nối.
  */
+/** Lần đọc đầu tiên mở Chrome ẩn nên lâu hơn các op khác. */
+const MESSENGER_TIMEOUT = 60_000;
+
 export function createHostMessengerProvider(host: PluginHost, opts: {onAuthLost?: () => void} = {}): ChatProvider {
  const check = (r: MessengerResult): void => {
   if (r.ok) return;
@@ -188,17 +191,17 @@ export function createHostMessengerProvider(host: PluginHost, opts: {onAuthLost?
    return [MESSENGER_ACCOUNT];
   },
   async listConversations({folder}: {folder: ChatFolder}): Promise<ChatConversation[]> {
-   const r = await callOp<MessengerResult & {conversations: Array<{id: string; title: string; snippet: string; time: string; unread: boolean; isGroup: boolean}>}>(host, 'messenger.conversations', {folder});
+   const r = await callOp<MessengerResult & {conversations: Array<{id: string; title: string; snippet: string; time: string; unread: boolean; isGroup: boolean; avatar?: string}>}>(host, 'messenger.conversations', {folder}, MESSENGER_TIMEOUT);
    check(r);
-   return r.conversations.map(c => ({id: c.id, accountId: MESSENGER_ACCOUNT.id, name: c.title, kind: c.isGroup ? 'group' : 'direct', preview: c.snippet, lastAt: messengerTimeToIso(c.time), unread: c.unread ? 1 : 0}));
+   return r.conversations.map(c => ({id: c.id, accountId: MESSENGER_ACCOUNT.id, name: c.title, kind: c.isGroup ? 'group' : 'direct', preview: c.snippet, lastAt: messengerTimeToIso(c.time), unread: c.unread ? 1 : 0, ...(c.avatar ? {avatarUrl: c.avatar} : {})}));
   },
   async getMessages(conversationId: string): Promise<ChatMessage[]> {
-   const r = await callOp<MessengerResult & {messages: Array<{id: string; from: 'me' | 'them'; senderName: string; text: string; time: string}>}>(host, 'messenger.messages', {conversationId});
+   const r = await callOp<MessengerResult & {messages: Array<{id: string; from: 'me' | 'them'; senderName: string; text: string; time: string}>}>(host, 'messenger.messages', {conversationId}, MESSENGER_TIMEOUT);
    check(r);
    return r.messages.map(m => ({id: m.id, at: messengerTimeToIso(m.time), text: m.text, fromMe: m.from === 'me', ...(m.senderName ? {author: m.senderName} : {})}));
   },
   async send(conversationId: string, text: string) {
-   check(await callOp<MessengerResult>(host, 'messenger.send', {conversationId, text}));
+   check(await callOp<MessengerResult>(host, 'messenger.send', {conversationId, text}, MESSENGER_TIMEOUT));
   },
   acceptStranger: unsupported,
   block: unsupported,

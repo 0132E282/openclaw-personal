@@ -43,23 +43,28 @@ async function mount(f){
  await tick(60);
  return {c,unmount:()=>view.dispose()};
 }
+const openAcc=async(c,label)=>{click(btn(c,`Mở danh sách tài khoản ${label}`));await tick(40);};
 const calls=(f,m)=>f.calls.filter(c=>c[0]===m||(c[0]==='plugins.sessionAction'&&c[1].actionId===m));
 
 test('Email: xác nhận nêu hệ quả, Hủy không gọi remove',async()=>{
  const f=fakeHost();const {c,unmount}=await mount(f);
- click(btn(c,'Đăng xuất'));await tick();
+ await openAcc(c,'Email');
+ click(btn(c,'Đăng xuất katri@gmail.com'));await tick();
  const d=dialog();assert.ok(d);
  assert.match(d.textContent,/myaccount\.google\.com\/permissions/);assert.match(d.textContent,/trên máy này/);
- assert.ok(d.textContent.includes('katri@gmail.com')&&d.textContent.includes('work@company.com'));
+ assert.ok(d.textContent.includes('katri@gmail.com')&&!d.textContent.includes('work@company.com'));
  click(btn(d,'Hủy'));await tick();
  assert.equal(dialog(),null);assert.equal(calls(f,'gmail.accounts.remove').length,0);unmount();
 });
 test('Email: đăng xuất từng tài khoản gọi đúng payload; hết tài khoản quay về chưa kết nối',async()=>{
  const f=fakeHost();const {c,unmount}=await mount(f);
- click(btn(c,'Đăng xuất'));await tick();
- click(btn(dialog(),'Đăng xuất work@company.com'));await tick(80);
+ await openAcc(c,'Email');
+ click(btn(c,'Đăng xuất work@company.com'));await tick();
+ click(btn(dialog(),'Đăng xuất work@company.com'));await tick(100);
  assert.deepEqual(calls(f,'gmail.accounts.remove').map(x=>x[1].payload),[{accountId:'a2'}]);
- assert.ok(dialog());assert.ok(!dialog().textContent.includes('work@company.com'));
+ if(dialog()){const x=btn(dialog(),'Đóng')||btn(dialog(),'Hủy');if(x){click(x);await tick(60);}}
+ if(btn(c,'Mở danh sách tài khoản Email'))await openAcc(c,'Email');
+ click(btn(c,'Đăng xuất katri@gmail.com'));await tick();
  click(btn(dialog(),'Đăng xuất katri@gmail.com'));await tick(100);
  assert.deepEqual(calls(f,'gmail.accounts.remove').map(x=>x[1].payload),[{accountId:'a2'},{accountId:'a1'}]);
  assert.equal(dialog(),null);
@@ -67,14 +72,16 @@ test('Email: đăng xuất từng tài khoản gọi đúng payload; hết tài 
 });
 test('Email: lỗi xóa hiển thị thông báo và giữ tài khoản',async()=>{
  const f=fakeHost({removeFails:true});const {c,unmount}=await mount(f);
- click(btn(c,'Đăng xuất'));await tick();
+ await openAcc(c,'Email');
+ click(btn(c,'Đăng xuất katri@gmail.com'));await tick();
  click(btn(dialog(),'Đăng xuất katri@gmail.com'));await tick(80);
  assert.match(dialog().querySelector('[role=alert]').textContent,/Không đăng xuất được katri@gmail\.com/);
  assert.ok(dialog().textContent.includes('katri@gmail.com'));unmount();
 });
-const zaloLogout=c=>[...c.querySelectorAll('button.op-shell__cat')].filter(b=>b.textContent==='Đăng xuất').at(-1);
+const zaloLogout=c=>c.querySelector('[role=group][aria-label="Tài khoản Zalo"] button.op-shell__acc-out');
 async function openZalo(c){
  click(btn(c,'Zalo'));await tick(60);
+ click(btn(c,'Mở danh sách tài khoản Zalo'));await tick(40);
 }
 test('Zalo: Hủy không gọi channels.logout; xác nhận gọi đúng method/payload rồi về màn liên kết',async()=>{
  const f=fakeHost();const {c,unmount}=await mount(f);

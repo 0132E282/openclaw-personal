@@ -3,10 +3,11 @@ import {useCallback, useEffect, useMemo, useState, type ReactNode} from 'react';
 import {requestWithTimeout, type PluginHost} from '../host';
 import {loadZaloAccounts, type ZaloAccountInfo} from '../connectors/zalo';
 import {ConnectGmail, EmailApp, callOp, createHostEmailProvider, type AuthState, type Folder as EmailFolder} from './email';
+import type {Account as EmailAccount} from './email/provider';
 import {GMAIL_ICON} from './email/gmailIcon';
 import {ZALO_ICON} from './chat/zaloIcon';
 import {MESSENGER_ICON} from './chat/messengerIcon';
-import {ChatApp, ZaloQr, createHostZaloProvider, createHostMessengerProvider, type BrowserLoginResult, type MessengerCookies, type ChatChannel, type ChatFolder, type QrLoginStep} from './chat';
+import {ChatApp, ZaloQr, MESSENGER_ACCOUNT, createHostZaloProvider, createHostMessengerProvider, type BrowserLoginResult, type MessengerCookies, type ChatChannel, type ChatFolder, type QrLoginStep} from './chat';
 import {EmailLogoutDialog, MessengerLogoutDialog, ZaloLogoutDialog} from './LogoutDialogs';
 import {SetupGuide, type SetupItem} from './setup';
 
@@ -120,24 +121,33 @@ const saveClientId = (id: string) => { try { localStorage.setItem(CLIENT_KEY, id
 /** Ảnh đại diện tài khoản Zalo: ảnh CDN (đã lọc https) nếu tải được, không thì chữ cái đầu. */
 function AccountAvatar({account}: {account: ZaloAccountInfo}) {
  const [failed, setFailed] = useState(false);
- if (account.avatar && !failed) return <img className="op-shell__acc-ava" src={account.avatar} alt="" width="18" height="18" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+ if (account.avatar && !failed) return <img className="op-shell__acc-ava" src={account.avatar} alt="" width="24" height="24" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
  return <span className="op-shell__acc-ava" aria-hidden="true">{account.name.slice(0, 1).toUpperCase()}</span>;
 }
+
+/** Mũi tên mở/đóng cùng kích thước ở mọi nơi; xoay 180° khi mở. */
+const Chevron = ({open, className}: {open: boolean; className: string}) => <svg className={className} data-open={open ? 'true' : undefined} viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.200" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>;
+
+/** Một mục tài khoản trong danh sách của kênh; `logoutLabel` có thì hiện nút đăng xuất riêng. */
+interface AccItem {id: string; name: string; lead: ReactNode; active: boolean; onSelect(): void; logoutLabel?: string; onLogout?(): void}
 
 /** `connected`: kênh đã có tài khoản; chỉ khi đó mới hiện dropdown danh mục. Chưa có provider thật nên mặc định chưa kênh nào kết nối. */
 function Personal({host}: {host?: PluginHost}) {
  const provider = useMemo(() => (host ? createHostEmailProvider(host) : undefined), [host]);
- const [emailAccounts, setEmailAccounts] = useState(0);
+ const [emailAccounts, setEmailAccounts] = useState<readonly EmailAccount[]>([]);
+ const [emailPick, setEmailPick] = useState('');
  const [connecting, setConnecting] = useState(false);
  const [rev, setRev] = useState(0);
  const [composeReq, setComposeReq] = useState(0);
  const [zaloQr, setZaloQr] = useState<string | null>(null);
  const [zaloAccounts, setZaloAccounts] = useState<readonly ZaloAccountInfo[]>([]);
  const [zaloPick, setZaloPick] = useState('');
+ const [accOpen, setAccOpen] = useState<ReadonlySet<Kind>>(new Set<Kind>());
+ const toggleAcc = (k: Kind) => setAccOpen(prev => { const next = new Set(prev); if (next.has(k)) next.delete(k); else next.add(k); return next; });
  const [zaloAdding, setZaloAdding] = useState(false);
  const [zaloAddError, setZaloAddError] = useState('');
  const [zaloRev, setZaloRev] = useState(0);
- const [logout, setLogout] = useState<'email' | 'zalo' | 'messenger' | null>(null);
+ const [logout, setLogout] = useState<{kind: 'email' | 'zalo' | 'messenger'; accountId?: string} | null>(null);
  const [messengerState, setMessengerState] = useState<MessengerStatus['state'] | null>(null);
  const [messengerRev, setMessengerRev] = useState(0);
  useEffect(() => {
@@ -177,11 +187,22 @@ function Personal({host}: {host?: PluginHost}) {
  };
  useEffect(() => {
   let live = true;
-  provider?.listAccounts().then(a => { if (live) setEmailAccounts(a.length); }, () => { if (live) setEmailAccounts(0); });
+  provider?.listAccounts().then(a => { if (live) setEmailAccounts(a); }, () => { if (live) setEmailAccounts([]); });
   return () => { live = false; };
  }, [provider, rev]);
  const messengerLinked = messengerState === 'connected';
- const connected: Partial<Record<Kind, boolean>> = {email: emailAccounts > 0, zalo: zaloLinked, messenger: messengerLinked};
+ const connected: Partial<Record<Kind, boolean>> = {email: emailAccounts.length > 0, zalo: zaloLinked, messenger: messengerLinked};
+ /** Tài khoản Email đang xem: lựa chọn nếu còn kết nối, không thì '' (gộp tất cả). */
+ const emailFilter = emailAccounts.some(a => a.id === emailPick) ? emailPick : '';
+ const accountItems = (k: Kind): readonly AccItem[] => {
+  if (k === 'zalo') return zaloAccounts.map(a => ({id: a.accountId, name: a.name, lead: <AccountAvatar account={a} />, active: a.accountId === zaloAccount, onSelect: () => { setZaloPick(a.accountId); pick('zalo', 'all'); }, logoutLabel: `Đăng xuất ${a.name}`, onLogout: () => setLogout({kind: 'zalo', accountId: a.accountId})}));
+  if (k === 'email') return [
+   {id: '', name: 'Tất cả tài khoản', lead: <span className="op-shell__acc-ava op-shell__acc-ava--all" aria-hidden="true">*</span>, active: emailFilter === '', onSelect: () => { setEmailPick(''); pick('email', 'all'); }},
+   ...emailAccounts.map(a => ({id: a.id, name: a.address, lead: <span className="op-shell__acc-ava" style={{background: a.color}} aria-hidden="true">{a.address.slice(0, 1).toUpperCase()}</span>, active: a.id === emailFilter, onSelect: () => { setEmailPick(a.id); pick('email', 'all'); }, logoutLabel: `Đăng xuất ${a.address}`, onLogout: () => setLogout({kind: 'email', accountId: a.id})})),
+  ];
+  if (k === 'messenger') return [{id: MESSENGER_ACCOUNT.id, name: MESSENGER_ACCOUNT.name, lead: <span className="op-shell__acc-ava" aria-hidden="true">{MESSENGER_ACCOUNT.name.slice(0, 1)}</span>, active: true, onSelect: () => pick('messenger', 'all'), logoutLabel: `Đăng xuất ${MESSENGER_ACCOUNT.name}`, onLogout: () => setLogout({kind: 'messenger'})}];
+  return [];
+ };
  const catsOf = (k: Kind): ReadonlyArray<[AnyFolder, string]> => CATS[k];
  const [active, setActive] = useState<Kind>('email');
  const [folder, setFolder] = useState<AnyFolder>('all');
@@ -200,23 +221,34 @@ function Personal({host}: {host?: PluginHost}) {
         <button type="button" className="op-shell__item" data-active={!expanded && n.id === active && folder === 'all' ? 'true' : undefined} onClick={() => pick(n.id, 'all')}>
          <span className="op-shell__logo">{n.logo}</span><span className="op-shell__label">{n.label}</span><span className="op-shell__dot" data-on={isOn ? 'true' : undefined} aria-label={isOn ? 'Đã kết nối' : 'Chưa kết nối'} />
         </button>
-        {isOn && <button type="button" className="op-shell__chev" aria-expanded={expanded} aria-label={`${expanded ? 'Thu gọn' : 'Mở'} danh mục ${n.label}`} onClick={() => toggle(n.id)}>{expanded ? '⌃' : '⌄'}</button>}
+        {isOn && <button type="button" className="op-shell__chev" aria-expanded={expanded} aria-label={`${expanded ? 'Thu gọn' : 'Mở'} danh mục ${n.label}`} onClick={() => toggle(n.id)}><Chevron open={expanded} className="op-shell__chevsvg" /></button>}
        </div>
        {expanded && (
         <ul className="op-shell__cats">
          {n.id === 'email' && <li><button type="button" className="op-shell__cat op-shell__cat--action" onClick={() => { pick('email', 'all'); setComposeReq(c => c + 1); }}><Icon k="compose" />Soạn thư</button></li>}
-         {catsOf(n.id).map(([f, label]) => (
-          <li key={f}><button type="button" className="op-shell__cat" data-danger={f === 'spam' ? 'true' : undefined} data-active={n.id === active && folder === f ? 'true' : undefined} onClick={() => pick(n.id, f)}><Icon k={f as IconKey} />{label}</button></li>
-         ))}
-         {n.id === 'zalo' && zaloAccounts.length > 1 && (
-          <li className="op-shell__accounts" role="group" aria-label="Tài khoản Zalo">
-           {zaloAccounts.map(a => <button key={a.accountId} type="button" className="op-shell__cat op-shell__acc" aria-pressed={a.accountId === zaloAccount} data-active={a.accountId === zaloAccount ? 'true' : undefined} onClick={() => { setZaloPick(a.accountId); pick('zalo', active === 'zalo' ? folder : 'all'); }}><AccountAvatar account={a} />{a.name}</button>)}
+         {catsOf(n.id).map(([f, label]) => {
+          const hasAcc = f === 'all' && (n.id === 'messenger' || (n.id === 'email' ? emailAccounts.length : zaloAccounts.length) > 0);
+          return (
+          <li key={f}>
+           <div className={hasAcc ? 'op-shell__catrow' : undefined}>
+            <button type="button" className="op-shell__cat" data-danger={f === 'spam' ? 'true' : undefined} data-active={n.id === active && folder === f ? 'true' : undefined} onClick={() => pick(n.id, f)}><Icon k={f as IconKey} />{label}</button>
+            {hasAcc && <button type="button" className="op-shell__accchev" aria-expanded={accOpen.has(n.id)} aria-label={`${accOpen.has(n.id) ? 'Thu gọn' : 'Mở'} danh sách tài khoản ${n.label}`} onClick={() => toggleAcc(n.id)}><Chevron open={accOpen.has(n.id)} className="op-shell__subchev" /></button>}
+           </div>
+           {hasAcc && accOpen.has(n.id) && (
+            <div className="op-shell__accounts" role="group" aria-label={`Tài khoản ${n.label}`}>
+             {accountItems(n.id).map(a => (
+              <div key={a.id} className="op-shell__accrow">
+               <button type="button" className="op-shell__cat op-shell__acc" aria-pressed={a.active} data-active={a.active ? 'true' : undefined} onClick={a.onSelect}>{a.lead}<span className="op-shell__acc-name">{a.name}</span></button>
+               {a.onLogout && <button type="button" className="op-shell__acc-out" aria-label={a.logoutLabel} title={a.logoutLabel} onClick={a.onLogout}><Icon k="logout" /></button>}
+              </div>
+             ))}
+             {n.id !== 'messenger' && <button type="button" className="op-shell__cat op-shell__cat--action op-shell__acc op-shell__accadd" disabled={n.id === 'zalo' && zaloAdding} onClick={() => (n.id === 'email' ? setConnecting(true) : void addZaloAccount())}><Icon k="plus" />Thêm tài khoản</button>}
+             {n.id === 'zalo' && zaloAddError && <p className="op-shell__acc-error" role="alert">{zaloAddError}</p>}
+            </div>
+           )}
           </li>
-         )}
-         {n.id === 'email' && <li><button type="button" className="op-shell__cat op-shell__cat--action" onClick={() => setConnecting(true)}><Icon k="plus" />Thêm tài khoản</button></li>}
-         {n.id === 'zalo' && <li><button type="button" className="op-shell__cat op-shell__cat--action" disabled={zaloAdding} onClick={() => void addZaloAccount()}><Icon k="plus" />Thêm tài khoản</button></li>}
-         {n.id === 'zalo' && zaloAddError && <li><p className="op-shell__acc-error" role="alert">{zaloAddError}</p></li>}
-         {<li><button type="button" className="op-shell__cat op-shell__cat--action" data-danger="true" onClick={() => setLogout(n.id)}><Icon k="logout" />Đăng xuất</button></li>}
+          );
+         })}
         </ul>
        )}
       </div>
@@ -225,7 +257,7 @@ function Personal({host}: {host?: PluginHost}) {
    </nav>
    <div className="op-shell__body" key={active === 'zalo' ? `zalo:${zaloAccount}` : active}>
     {active === 'email'
-     ? <EmailApp key={rev} composeRequest={composeReq} provider={provider} folder={folder as EmailFolder} onFolderChange={setFolder} onConnect={host ? () => setConnecting(true) : undefined} notConnectedExtra={<Setup kind="email" host={host} onConnect={() => setConnecting(true)} />} />
+     ? <EmailApp key={rev} composeRequest={composeReq} provider={provider} accountFilter={emailFilter || undefined} folder={folder as EmailFolder} onFolderChange={setFolder} onConnect={host ? () => setConnecting(true) : undefined} notConnectedExtra={<Setup kind="email" host={host} onConnect={() => setConnecting(true)} />} />
      : <ChatApp channel={active} provider={active === 'zalo' && zaloLinked ? zaloProvider : active === 'messenger' && messengerLinked ? messengerProvider : undefined} pollMs={active === 'messenger' ? MESSENGER_POLL : undefined} folder={folder as ChatFolder} onFolderChange={setFolder} onLinkQr={host ? () => setZaloQr('default') : undefined} onStartBrowserLogin={messengerLogin?.start} onCancelBrowserLogin={messengerLogin?.cancel} onSubmitCookies={messengerLogin?.submit} notConnectedExtra={<Setup kind={active} host={host} onConnect={() => setZaloQr('default')} />} />}
    </div>
    {zaloQr && host && (
@@ -233,27 +265,27 @@ function Personal({host}: {host?: PluginHost}) {
      start={() => host.request('web.login.start', {channel: 'zalouser', ...(zaloQr !== 'default' ? {accountId: zaloQr} : {}), timeoutMs: 30_000}) as Promise<QrLoginStep>}
      wait={cur => host.request('web.login.wait', {channel: 'zalouser', ...(zaloQr !== 'default' ? {accountId: zaloQr} : {}), timeoutMs: 120_000, ...(cur.qrDataUrl ? {currentQrDataUrl: cur.qrDataUrl} : {}), ...(cur.sessionKey ? {sessionKey: cur.sessionKey} : {})}) as Promise<QrLoginStep>}
      check={async () => (await loadZaloAccounts(host)).some(a => a.accountId === zaloQr)}
-     onLinked={() => { setZaloPick(zaloQr); setZaloRev(r => r + 1); setZaloQr(null); }}
+     onLinked={() => { setZaloPick(zaloQr); setAccOpen(prev => new Set(prev).add('zalo')); setZaloRev(r => r + 1); setZaloQr(null); }}
      onClose={() => setZaloQr(null)}
     />
    )}
-   {logout === 'email' && host && (
+   {logout?.kind === 'email' && host && (
     <EmailLogoutDialog
-     load={() => callOp<{accounts: {id: string; address: string}[]}>(host, 'gmail.accounts.list').then(r => r.accounts)}
+     load={() => callOp<{accounts: {id: string; address: string}[]}>(host, 'gmail.accounts.list').then(r => (logout.accountId ? r.accounts.filter(a => a.id === logout.accountId) : r.accounts))}
      remove={async id => { const r = await callOp<{ok: boolean}>(host, 'gmail.accounts.remove', {accountId: id}); if (!r.ok) throw new Error('remove-failed'); }}
      onChanged={() => setRev(r => r + 1)}
      onClose={() => setLogout(null)}
     />
    )}
-   {logout === 'zalo' && host && (
+   {logout?.kind === 'zalo' && host && (
     <ZaloLogoutDialog
-     accounts={zaloAccounts}
+     accounts={logout.accountId ? zaloAccounts.filter(a => a.accountId === logout.accountId) : zaloAccounts}
      logout={id => requestWithTimeout(host, 'channels.logout', {channel: 'zalouser', ...(id && (id !== 'default' || zaloAccounts.length > 1) ? {accountId: id} : {})}, 30_000)}
      onDone={() => setZaloRev(r => r + 1)}
      onClose={() => setLogout(null)}
     />
    )}
-   {logout === 'messenger' && host && (
+   {logout?.kind === 'messenger' && host && (
     <MessengerLogoutDialog
      logout={async () => { const r = await callOp<{ok: boolean}>(host, 'messenger.cookies.clear'); if (!r.ok) throw new Error('clear-failed'); }}
      onDone={recheckMessenger}
@@ -263,7 +295,7 @@ function Personal({host}: {host?: PluginHost}) {
    {connecting && host && (
     <ConnectGmail
      initialClientId={savedClientId()}
-     auto={emailAccounts > 0}
+     auto={emailAccounts.length > 0}
      start={async (clientId, clientSecret) => { if (clientId) saveClientId(clientId); return callOp<AuthState>(host, 'gmail.auth.start', clientId ? (clientSecret ? {clientId, clientSecret} : {clientId}) : {}).then(r => ({...r, reason: null})); }}
      status={() => callOp<AuthState>(host, 'gmail.auth.status')}
      cancel={() => callOp(host, 'gmail.auth.cancel')}

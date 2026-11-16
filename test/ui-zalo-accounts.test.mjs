@@ -59,25 +59,31 @@ test('deriveZaloAccounts: chỉ tài khoản đã liên kết, default đứng �
  assert.deepEqual(deriveZaloAccounts({channelAccounts:{zalouser:[{linked:true,running:true}]}}),[{accountId:'default',name:'Zalo'}]);
 });
 
-test('bộ chọn tài khoản chỉ hiện khi có từ 2 tài khoản; đổi tài khoản tải lại theo accountId',async()=>{
+test('Chevron cạnh Tất cả tin nhắn: bấm mới mở/đóng danh sách tài khoản; chọn tài khoản tải lại theo accountId',async()=>{
  const one=fakeHost({accounts:[acct('default','An')]});
  const m1=await mount(one);
+ assert.equal(accountGroup(m1.c),null);
+ click(btn(m1.c,'Mở danh sách tài khoản Zalo')||btn(m1.c,'Thu gọn danh sách tài khoản Zalo'));await tick(40);
+ assert.deepEqual([...accountGroup(m1.c).querySelectorAll('.op-shell__accrow button.op-shell__acc')].map(b=>b.lastChild.textContent),['An']);
+ click(btn(m1.c,'Mở danh sách tài khoản Zalo')||btn(m1.c,'Thu gọn danh sách tài khoản Zalo'));await tick(40);
  assert.equal(accountGroup(m1.c),null);
  assert.deepEqual(op(one,'zalo.conversations')[0],{folder:'all'}); // default: payload cũ, không accountId
  m1.unmount();
  const f=fakeHost();const {c,unmount}=await mount(f);
+ assert.equal(accountGroup(c),null);
+ click(btn(c,'Mở danh sách tài khoản Zalo'));await tick(40);
  const g=accountGroup(c);assert.ok(g);
- const items=[...g.querySelectorAll('button')];
+ const items=[...g.querySelectorAll('.op-shell__accrow button.op-shell__acc')];
  assert.deepEqual(items.map(b=>b.lastChild.textContent),['An','Bình']);
  assert.equal(items[0].getAttribute('aria-pressed'),'true');
  assert.ok(c.textContent.includes('Người A'));assert.ok(!c.textContent.includes('Người B'));
  click(items[1]);await tick(80);
- assert.equal(accountGroup(c).querySelectorAll('button')[1].getAttribute('aria-pressed'),'true');
+ assert.equal(accountGroup(c).querySelectorAll('.op-shell__accrow button.op-shell__acc')[1].getAttribute('aria-pressed'),'true');
  assert.ok(c.textContent.includes('Người B'));assert.ok(!c.textContent.includes('Người A'));
  assert.ok(op(f,'zalo.conversations').some(p=>p.accountId==='acc-b'));
  // đồng bộ userId theo đúng tài khoản
  assert.ok(op(f,'zalo.account.sync').some(p=>p.accountId==='acc-b'&&p.userId==='u-acc-b'));
- click(accountGroup(c).querySelectorAll('button')[0]);await tick(80);
+ click(accountGroup(c).querySelectorAll('.op-shell__accrow button.op-shell__acc')[0]);await tick(80);
  assert.ok(c.textContent.includes('Người A'));
  unmount();
 });
@@ -85,6 +91,7 @@ test('bộ chọn tài khoản chỉ hiện khi có từ 2 tài khoản; đổi 
 test('Thêm tài khoản: chỉ gọi zalo.accounts.add khi bấm, rồi mở QR với accountId mới và chọn tài khoản đó',async()=>{
  const f=fakeHost({accounts:[acct('default','An')]});const {c,unmount}=await mount(f);
  assert.equal(op(f,'zalo.accounts.add').length,0);
+ click(btn(c,'Mở danh sách tài khoản Zalo'));await tick(40);
  click(btn(c,'Thêm tài khoản'));await tick(150);
  assert.deepEqual(op(f,'zalo.accounts.add'),[{}]);
  const start=f.calls.find(x=>x[0]==='web.login.start');
@@ -94,7 +101,7 @@ test('Thêm tài khoản: chỉ gọi zalo.accounts.add khi bấm, rồi mở QR
  await tick(150);
  assert.equal(f.state.find(a=>a.accountId==='acc-new').linked,true);
  // QR xong: bộ chọn xuất hiện (2 tài khoản) và tài khoản mới đang được xem
- const items=[...accountGroup(c).querySelectorAll('button')];
+ const items=[...accountGroup(c).querySelectorAll('.op-shell__accrow button.op-shell__acc')];
  assert.equal(items.length,2);
  const sel=items.find(b=>b.getAttribute('aria-pressed')==='true');assert.ok(sel.textContent.includes('acc-new')||sel.textContent.includes('Mới')||sel.textContent.length>0);
  assert.ok(op(f,'zalo.conversations').some(p=>p.accountId==='acc-new'));
@@ -103,6 +110,7 @@ test('Thêm tài khoản: chỉ gọi zalo.accounts.add khi bấm, rồi mở QR
 
 test('Thêm tài khoản lỗi: báo lỗi, không mở QR',async()=>{
  const f=fakeHost({addFails:true,accounts:[acct('default','An')]});const {c,unmount}=await mount(f);
+ click(btn(c,'Mở danh sách tài khoản Zalo'));await tick(40);
  click(btn(c,'Thêm tài khoản'));await tick(100);
  assert.match(c.querySelector('[role=alert]').textContent,/Không tạo được tài khoản Zalo mới/);
  assert.equal(dialog(),null);assert.equal(f.calls.filter(x=>x[0]==='web.login.start').length,0);
@@ -111,15 +119,16 @@ test('Thêm tài khoản lỗi: báo lỗi, không mở QR',async()=>{
 
 test('Đăng xuất nhiều tài khoản: chọn đúng tài khoản, channels.logout kèm accountId; tài khoản còn lại giữ nguyên',async()=>{
  const f=fakeHost();const {c,unmount}=await mount(f);
- click([...c.querySelectorAll('button.op-shell__cat')].filter(b=>b.textContent==='Đăng xuất').at(-1));await tick();
- const d=dialog();assert.ok(d);assert.ok(d.textContent.includes('An')&&d.textContent.includes('Bình'));
+ click(btn(c,'Mở danh sách tài khoản Zalo'));await tick(40);
+ click(btn(c,'Đăng xuất Bình'));await tick();
+ const d=dialog();assert.ok(d);assert.ok(!d.textContent.includes('Chọn tài khoản'));
  click(btn(d,'Hủy')||btn(d,'Đóng'));await tick();
  assert.equal(dialog(),null);assert.equal(f.calls.filter(x=>x[0]==='channels.logout').length,0);
- click([...c.querySelectorAll('button.op-shell__cat')].filter(b=>b.textContent==='Đăng xuất').at(-1));await tick();
- click(btn(dialog(),'Đăng xuất Bình'));await tick(100);
+ click(btn(c,'Đăng xuất Bình'));await tick();
+ click([...dialog().querySelectorAll('button')].filter(b=>b.textContent==='Đăng xuất').at(-1));await tick(100);
  assert.deepEqual(f.calls.filter(x=>x[0]==='channels.logout'),[['channels.logout',{channel:'zalouser',accountId:'acc-b'}]]);
  assert.equal(f.state.find(a=>a.accountId==='default').linked,true);
- assert.equal(accountGroup(c),null); // còn 1 tài khoản: bộ chọn biến mất, đang xem An
+ assert.deepEqual([...accountGroup(c).querySelectorAll('.op-shell__accrow button.op-shell__acc')].map(b=>b.lastChild.textContent),['An']); // còn 1 tài khoản, đang xem An
  assert.ok(c.textContent.includes('Người A'));
  unmount();
 });

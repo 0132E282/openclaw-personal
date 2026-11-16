@@ -29,6 +29,8 @@ export interface ChatConversation {
   subtitle?: string;
   /** Có ảnh đại diện để tải qua `getAvatar`; không có thì hiện chữ cái đầu. */
   hasAvatar?: boolean;
+  /** URL https ảnh đại diện tải thẳng bằng thẻ img (Messenger); lỗi tải thì hiện chữ cái đầu. */
+  avatarUrl?: string;
 }
 
 export interface ChatMessage {

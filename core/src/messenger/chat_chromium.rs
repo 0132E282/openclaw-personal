@@ -78,6 +78,13 @@ impl PageLauncher for ChromiumPageLauncher {
         use futures::StreamExt;
         let exe = find_browser().ok_or(LaunchError::Missing)?;
         std::fs::create_dir_all(&self.profile_dir).map_err(|_| LaunchError::Failed)?;
+        // Chrome mồ côi từ lần chạy trước (ví dụ sau khi Gateway restart) vẫn giữ thư mục dữ liệu này và làm trang kẹt:
+        // đóng các tiến trình dùng đúng thư mục của plugin trước khi mở phiên mới.
+        // `--` bắt buộc: mẫu bắt đầu bằng `--` sẽ bị pkill (macOS) hiểu là tùy chọn và không làm gì cả.
+        let killed = std::process::Command::new("pkill").args(["-f", "--"]).arg(format!("--user-data-dir={}", self.profile_dir.display())).status().is_ok_and(|s| s.success());
+        if killed {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
         // Khóa mồ côi sau khi tiến trình trước chết đột ngột (chỉ phiên của plugin dùng thư mục này).
         for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
             let _ = std::fs::remove_file(self.profile_dir.join(f));

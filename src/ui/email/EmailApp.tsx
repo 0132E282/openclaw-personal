@@ -17,6 +17,8 @@ export interface EmailAppProps {
  notConnectedExtra?: ReactNode;
  /** Tăng giá trị để mở màn soạn thư từ bên ngoài (ví dụ mục Soạn thư ở sidebar). */
  composeRequest?: number;
+ /** Id tài khoản cần xem riêng (từ sidebar); bỏ trống hoặc không khớp thì gộp tất cả tài khoản. */
+ accountFilter?: string;
  now?: () => Date;
  /** Chu kỳ làm mới danh sách thư (ms) khi tab hiển thị; 0 để tắt. Không đóng thư đang đọc/soạn. */
  pollMs?: number;
@@ -28,7 +30,7 @@ const FOLDER_TABS: ReadonlyArray<[Folder, string]> = [['all', 'Tất cả'], ['u
 /** Danh sách thư đã tải theo (provider, thư mục, tài khoản): đổi thư mục/mở lại hiện ngay, không chờ Gmail. */
 const listCache = new WeakMap<object, Map<string, Message[]>>();
 
-export function EmailApp({provider, folder: folderProp, onFolderChange, onConnect, onLearnMore, notConnectedExtra, composeRequest, now, pollMs = DEFAULT_POLL_MS}: EmailAppProps) {
+export function EmailApp({provider, folder: folderProp, onFolderChange, onConnect, onLearnMore, notConnectedExtra, composeRequest, accountFilter, now, pollMs = DEFAULT_POLL_MS}: EmailAppProps) {
  const [inner, setInner] = useState<Folder>('all');
  const folder = folderProp ?? inner;
  const [accounts, setAccounts] = useState<readonly Account[] | null>(null);
@@ -49,9 +51,13 @@ export function EmailApp({provider, folder: folderProp, onFolderChange, onConnec
  useEffect(() => {
   if (!provider) { setAccounts([]); return; }
   let live = true;
-  provider.listAccounts().then(a => { if (live) { setAccounts(a); setActive(a.map(x => x.id)); } }, () => { if (live) setAccounts([]); });
+  provider.listAccounts().then(a => { if (live) setAccounts(a); }, () => { if (live) setAccounts([]); });
   return () => { live = false; };
  }, [provider]);
+
+ useEffect(() => {
+  if (accounts) setActive(accountFilter && accounts.some(a => a.id === accountFilter) ? [accountFilter] : accounts.map(a => a.id));
+ }, [accounts, accountFilter]);
 
  const activeKey = active.join('|');
  useEffect(() => {

@@ -77,7 +77,8 @@ const GroupGlyph = () => (
   </svg>
 );
 
-function Avatar({name, id, cache, group}: {name: string; id?: string; cache: AvatarCache; group?: boolean}) {
+function Avatar({name, id, cache, group, url}: {name: string; id?: string; cache: AvatarCache; group?: boolean; url?: string}) {
+  const [bad, setBad] = useState<string | null>(null);
   const [src, setSrc] = useState<string | null>(id ? cache.peek(id) ?? null : null);
   useEffect(() => {
     if (!id) { setSrc(null); return; }
@@ -86,6 +87,7 @@ function Avatar({name, id, cache, group}: {name: string; id?: string; cache: Ava
     cache.load(id).then(v => { if (live) setSrc(v); });
     return () => { live = false; };
   }, [id, cache]);
+  if (url && bad !== url) return <img className="op-chat__avatar op-chat__avatar--img" src={url} referrerPolicy="no-referrer" loading="lazy" alt="" aria-hidden="true" onError={() => setBad(url)} />;
   if (src) return <img className="op-chat__avatar op-chat__avatar--img" src={src} alt="" aria-hidden="true" />;
   if (group) return <span className="op-chat__avatar op-chat__avatar--group" aria-hidden="true"><GroupGlyph /></span>;
   return <span className="op-chat__avatar" aria-hidden="true">{initials(name)}</span>;
@@ -94,7 +96,7 @@ function Avatar({name, id, cache, group}: {name: string; id?: string; cache: Ava
 const sameMessages = (a: ChatMessage[], b: ChatMessage[]) => a.length === b.length && a.every((m, i) => m.id === b[i].id && m.text === b[i].text);
 const sameConvs = (a: ChatConversation[], b: ChatConversation[]) => a.length === b.length && a.every((c, i) => {
   const d = b[i];
-  return c.id === d.id && c.name === d.name && c.preview === d.preview && c.lastAt === d.lastAt && c.unread === d.unread && c.hasAvatar === d.hasAvatar && c.subtitle === d.subtitle;
+  return c.id === d.id && c.name === d.name && c.preview === d.preview && c.lastAt === d.lastAt && c.unread === d.unread && c.hasAvatar === d.hasAvatar && c.avatarUrl === d.avatarUrl && c.subtitle === d.subtitle;
 });
 
 export function ChatApp(props: ChatAppProps) {
@@ -102,8 +104,10 @@ export function ChatApp(props: ChatAppProps) {
   const name = CHANNEL_NAME[channel];
   const [accounts, setAccounts] = useState<ChatAccount[] | null>(null);
   const [convs, setConvs] = useState<ChatConversation[]>([]);
+  const [convsLoaded, setConvsLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState('');
@@ -139,19 +143,22 @@ export function ChatApp(props: ChatAppProps) {
     if (!provider || !connected) return;
     let live = true;
     setSelected([]);
+    setConvsLoaded(false);
     provider.listConversations({folder}).then(list => {
       if (!live) return;
       setError('');
+      setConvsLoaded(true);
       setConvs(list);
       setActiveId(cur => (cur && list.some(c => c.id === cur) ? cur : list[0]?.id ?? null));
-    }, e => live && setError(e instanceof ChatError ? e.message : 'Không tải được danh sách hội thoại.'));
+    }, e => { if (live) { setConvsLoaded(true); setError(e instanceof ChatError ? e.message : 'Không tải được danh sách hội thoại.'); } });
     return () => { live = false; };
   }, [provider, connected, folder, version]);
 
   useEffect(() => {
     if (!provider || !activeId) { setMessages([]); return; }
     let live = true;
-    provider.getMessages(activeId).then(m => live && setMessages(m), e => live && setError(e instanceof ChatError ? e.message : 'Không tải được tin nhắn.'));
+    setMessagesLoaded(false);
+    provider.getMessages(activeId).then(m => { if (live) { setMessages(m); setMessagesLoaded(true); } }, e => { if (live) { setMessagesLoaded(true); setError(e instanceof ChatError ? e.message : 'Không tải được tin nhắn.'); } });
     return () => { live = false; };
   }, [provider, activeId, version]);
 
@@ -297,13 +304,13 @@ export function ChatApp(props: ChatAppProps) {
       <div className="op-chat__list">
         {error && <p className="op-chat__error" role="alert">{error}</p>}
         <ul className="op-chat__rows">
-          {convs.length === 0 && <li className="op-chat__muted op-chat__pad">{provider?.folderEmptyText?.[folder] ?? `Không có hội thoại trong “${FOLDER_LABEL[folder] ?? 'mục này'}”.`}</li>}
+          {convs.length === 0 && !convsLoaded && !error && <li className="op-chat__muted op-chat__pad" role="status">Đang tải hội thoại…</li>}
+          {convs.length === 0 && (convsLoaded || !!error) && <li className="op-chat__muted op-chat__pad">{provider?.folderEmptyText?.[folder] ?? `Không có hội thoại trong “${FOLDER_LABEL[folder] ?? 'mục này'}”.`}</li>}
           {convs.map(c => {
             const on = selected.includes(c.id);
             return (
               <li key={c.id} className="op-chat__row" data-active={!selecting && c.id === activeId} aria-selected={on} data-selected={on} onClick={e => onRow(e, c.id)}>
-                <input type="checkbox" className="op-chat__check" aria-label={`Chọn ${c.name}`} checked={on} readOnly onClick={e => { e.stopPropagation(); onRow(e, c.id, true); }} />
-                <Avatar name={c.name} id={c.hasAvatar ? c.id : undefined} cache={avatars} group={c.kind === 'group'} />
+                <Avatar url={c.avatarUrl} name={c.name} id={c.hasAvatar ? c.id : undefined} cache={avatars} group={c.kind === 'group'} />
                 <div className="op-chat__row-main">
                   <div className="op-chat__row-top">
                     <span className="op-chat__row-name" data-unread={c.unread > 0}>{c.name}</span>
@@ -314,6 +321,7 @@ export function ChatApp(props: ChatAppProps) {
                     {c.unread > 0 && <span className="op-chat__badge" aria-label={`${c.unread} tin chưa đọc`}>{c.unread}</span>}
                   </div>
                 </div>
+                <input type="checkbox" className="op-chat__check" aria-label={`Chọn ${c.name}`} checked={on} readOnly onClick={e => { e.stopPropagation(); onRow(e, c.id, true); }} />
               </li>
             );
           })}
@@ -334,7 +342,7 @@ export function ChatApp(props: ChatAppProps) {
         ) : active ? (
           <>
             <div className="op-chat__head">
-              <Avatar name={active.name} id={active.hasAvatar ? active.id : undefined} cache={avatars} group={active.kind === 'group'} />
+              <Avatar url={active.avatarUrl} name={active.name} id={active.hasAvatar ? active.id : undefined} cache={avatars} group={active.kind === 'group'} />
               <div>
                 <div className="op-chat__title">{active.name}</div>
                 <div className="op-chat__sub" data-folder={folder}>{active.subtitle ?? (active.kind === 'group' ? 'Nhóm' : `${name} cá nhân`)}</div>
@@ -361,7 +369,8 @@ export function ChatApp(props: ChatAppProps) {
                   {notice.command && <code>{notice.command}</code>}
                 </div>
               )}
-              {messages.length === 0 && provider?.emptyHistoryText && <p className="op-chat__muted op-chat__pad">{provider.emptyHistoryText}</p>}
+              {messages.length === 0 && !messagesLoaded && <p className="op-chat__muted op-chat__pad" role="status">Đang tải tin nhắn…</p>}
+              {messages.length === 0 && messagesLoaded && provider?.emptyHistoryText && <p className="op-chat__muted op-chat__pad">{provider.emptyHistoryText}</p>}
               {grouped.map(m => 'sep' in m
                 ? <div key={m.id} className="op-chat__sep"><span>{m.sep}</span></div>
                 : (

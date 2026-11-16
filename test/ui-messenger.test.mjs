@@ -14,6 +14,7 @@ const file=join(await mkdtemp(join(tmpdir(),'op-chat-')),'m.mjs');
 await writeFile(file,out.outputFiles[0].text);
 const {ChatApp,createHostMessengerProvider,messengerTimeToIso,ChatError,React,createRoot}=await import(pathToFileURL(file).href);
 const {act}=React;
+Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>'visible'});
 const tick=()=>act(async()=>{await new Promise(r=>setTimeout(r,10));});
 async function mount(props){
  const el=document.createElement('div');document.body.append(el);const root=createRoot(el);
@@ -99,3 +100,23 @@ test('UI Messenger: polling nhẹ gọi lại theo chu kỳ',async()=>{
  assert.ok(f.calls.filter(c=>c[0]==='messenger.messages').length>n0);
  await m.unmount();
 });
+test('avatar: map avatar->avatarUrl, hiện img tròn, lỗi tải thì về chữ cái đầu',async()=>{
+ const U='https://scontent.xx.fbcdn.net/v/a.jpg';
+ const f=fakeHost({'messenger.conversations':{ok:true,e2eeHidden:0,conversations:[
+  {id:'111',title:'An',snippet:'chào bạn',time:'5 phút',unread:false,isGroup:false,avatar:U},
+  {id:'222',title:'Nhóm A',snippet:'ok',time:'12:30',unread:false,isGroup:true,avatar:''}]},'messenger.messages':MSGS});
+ const p=createHostMessengerProvider(f.host);
+ const l=await p.listConversations({folder:'all'});
+ assert.equal(l[0].avatarUrl,U);assert.equal('avatarUrl' in l[1],false);
+ const m=await mount({channel:'messenger',folder:'all',provider:p,pollMs:{messages:0,conversations:0}});
+ const imgs=()=>[...m.el.querySelectorAll('img.op-chat__avatar--img')];
+ assert.ok(imgs().length>=2);
+ const im=imgs()[0];
+ assert.ok(im.getAttribute('src')===U&&im.getAttribute('referrerpolicy')==='no-referrer'&&im.getAttribute('loading')==='lazy');
+ await act(async()=>{for(const x of imgs())x.dispatchEvent(new window.Event('error'));});
+ assert.equal(imgs().length,0);
+ assert.ok(m.el.textContent.includes('An'));
+ await m.unmount();
+});
+// React scheduler (MessageChannel) giữ tiến trình sống sau khi test xong.
+test.after(()=>{dom.window.close();setTimeout(()=>process.exit(process.exitCode??0),50).unref?.();});

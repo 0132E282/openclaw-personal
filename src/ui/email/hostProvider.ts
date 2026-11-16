@@ -5,8 +5,8 @@ const PLUGIN_ID = 'openclaw-personal';
 const COLORS = ['#e11d48', '#0284c7', '#16a34a', '#d97706', '#7c3aed'];
 
 /** Gọi một operation của plugin qua host; ném lỗi nếu host báo thất bại. */
-export async function callOp<T>(host: PluginHost, actionId: string, payload: unknown = {}): Promise<T> {
- const res = (await requestWithTimeout(host, 'plugins.sessionAction', {pluginId: PLUGIN_ID, actionId, payload}, 30_000)) as {ok?: boolean; result?: unknown; error?: {code?: unknown; message?: unknown}} | null;
+export async function callOp<T>(host: PluginHost, actionId: string, payload: unknown = {}, timeoutMs = 30_000): Promise<T> {
+ const res = (await requestWithTimeout(host, 'plugins.sessionAction', {pluginId: PLUGIN_ID, actionId, payload}, timeoutMs)) as {ok?: boolean; result?: unknown; error?: {code?: unknown; message?: unknown}} | null;
  if (!res || res.ok !== true) throw new Error(String(res?.error?.code ?? res?.error?.message ?? 'operation-failed').slice(0, 80));
  return res.result as T;
 }

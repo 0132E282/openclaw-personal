@@ -26,7 +26,8 @@
 .op-chat__row{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--op-line);border-left:3px solid transparent;cursor:pointer}
 .op-chat__row:hover{background:var(--op-hover)}
 .op-chat__row[data-active=true],.op-chat__row[data-selected=true]{border-left-color:var(--op-accent);background:var(--op-hover)}
-.op-chat__check{margin:0;flex:none}
+.op-chat__check{margin:0;flex:none;opacity:0;transition:opacity .12s ease;cursor:pointer}
+.op-chat__row:hover .op-chat__check,.op-chat__check:focus-visible,.op-chat__row[data-selected=true] .op-chat__check,.op-chat__rows:has(.op-chat__row[data-selected=true]) .op-chat__check{opacity:1}
 .op-chat__row-main{min-width:0;flex:1}
 .op-chat__row-top,.op-chat__row-bottom{display:flex;align-items:center;gap:8px}
 .op-chat__row-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

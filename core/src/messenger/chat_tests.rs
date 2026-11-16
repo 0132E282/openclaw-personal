@@ -73,8 +73,8 @@ type Shared = Arc<Mutex<FakeState>>;
 
 fn list_raw() -> String {
     json!({"ready": true, "rows": [
-        {"href": "/messages/t/111/", "lines": ["An", "chào bạn", "·", "5 phút"], "unread": true, "avatars": 1},
-        {"href": "/messages/t/222/", "lines": ["Nhóm A", "Bình: ok", "·", "12:30"], "unread": false, "avatars": 3},
+        {"href": "/messages/t/111/", "lines": ["An", "chào bạn", "·", "5 phút"], "unread": true, "avatars": 1, "avatar": "https://scontent-sin6-1.xx.fbcdn.net/v/t1/a.jpg?stp=1&_nc=2"},
+        {"href": "/messages/t/222/", "lines": ["Nhóm A", "Bình: ok", "·", "12:30"], "unread": false, "avatars": 3, "avatar": "http://x.fbcdn.net/a.jpg"},
         {"href": "/messages/e2ee/t/333/", "lines": ["Bí mật", "x"], "unread": false, "avatars": 1}
     ]})
     .to_string()
@@ -241,6 +241,14 @@ fn parse_messages_me_them_va_gioi_han() {
 }
 
 #[test]
+fn parse_messages_page_co_trang_thai_tai_va_thoi_gian() {
+    let p = parse_messages_page(&json!({"ready": true, "loading": true, "rows": [{"text": "a", "mine": false, "sender": "An", "time": "Lúc 12:30 5 Tháng 9, 2024"}]}).to_string()).unwrap();
+    assert!(p.loading);
+    assert_eq!((p.messages[0].time.as_str(), p.messages[0].sender_name.as_str()), ("Lúc 12:30 5 Tháng 9, 2024", "An"));
+    assert!(!parse_messages_page(r#"{"ready":true,"rows":[]}"#).unwrap().loading);
+}
+
+#[test]
 fn classify_anh_xa_ly_do() {
     let base = Probe { url: "https://www.facebook.com/messages/".into(), complete: true, list: true, ..Default::default() };
     assert_eq!(classify(&base, false), Ok(()));
@@ -378,6 +386,23 @@ async fn doc_tin_di_dung_hoi_thoai_va_chan_id_xau() {
 }
 
 #[tokio::test]
+async fn hoi_thoai_rong_that_va_chua_tai_xong() {
+    let chat = MessengerChat::new(cfg());
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l = FakeLauncher::new(&st);
+    // Khung tin có, đã tải xong, rỗng ổn định -> mảng rỗng thật.
+    st.lock().unwrap().messages_json = json!({"ready": true, "loading": false, "rows": []}).to_string();
+    assert!(chat.messages(&l, &store, "111").await.unwrap().is_empty());
+    // Còn đang tải: không được trả rỗng.
+    st.lock().unwrap().messages_json = json!({"ready": true, "loading": true, "rows": []}).to_string();
+    assert_eq!(chat.messages(&l, &store, "222").await.err(), Some(Reason::Timeout));
+    // Không thấy khung tin: selector hỏng.
+    st.lock().unwrap().messages_json = json!({"ready": false, "loading": false, "rows": []}).to_string();
+    assert_eq!(chat.messages(&l, &store, "444").await.err(), Some(Reason::SelectorBroken));
+}
+
+#[tokio::test]
 async fn gian_cach_toi_thieu_giua_cac_thao_tac() {
     let chat = MessengerChat::new(cfg());
     let store = store_with_cookies().await;
@@ -488,7 +513,7 @@ async fn ops_rpc_hinh_dang_va_khong_ro_cookie() {
     let c = call("messenger.conversations", json!({"folder": "group"})).await.unwrap();
     assert_eq!(c["ok"], true);
     assert_eq!(c["conversations"].as_array().unwrap().len(), 1);
-    assert_eq!(c["conversations"][0], json!({"id": "222", "title": "Nhóm A", "snippet": "Bình: ok", "time": "12:30", "unread": false, "isGroup": true}));
+    assert_eq!(c["conversations"][0], json!({"id": "222", "title": "Nhóm A", "snippet": "Bình: ok", "time": "12:30", "unread": false, "isGroup": true, "avatar": ""}));
     assert!(call("messenger.conversations", json!({"folder": "../x"})).await.is_err());
     let m = call("messenger.messages", json!({"conversationId": "111"})).await.unwrap();
     assert_eq!((m["ok"].clone(), m["messages"][0]["from"].clone(), m["messages"][1]["from"].clone()), (json!(true), json!("them"), json!("me")));
@@ -517,4 +542,22 @@ async fn ops_rpc_het_han_tra_ly_do() {
     assert_eq!(s, json!({"state": "expired", "reason": "not-logged-in"}));
     let s = chat_op("messenger.status", &json!({}), &empty_store(), &chat, &l).await.unwrap().unwrap();
     assert_eq!(s["state"], "no-cookies");
+}
+
+#[test]
+fn avatar_chi_nhan_https_host_facebook() {
+    use super::selectors::{avatar_url, parse_conversations};
+    for ok in ["https://scontent-sin6-1.xx.fbcdn.net/v/a.jpg?x=1", "https://static.xx.fbcdn.net/a", "https://www.facebook.com/a.png", "https://scontent.example.org/a"] {
+        assert_eq!(avatar_url(ok), ok);
+    }
+    let long = format!("https://scontent.xx.fbcdn.net/{}", "a".repeat(600));
+    for bad in ["", "data:image/png;base64,AAAA", "blob:https://www.facebook.com/x", "http://scontent.xx.fbcdn.net/a", "https://evil.com/a.jpg", "https://evil.com/.fbcdn.net", "https://notfbcdn.net/a", "https://x.fbcdn.net@evil.com/a", "https://evil.com\\.facebook.com/a", &long] {
+        assert_eq!(avatar_url(bad), "", "{bad}");
+    }
+    let raw = json!({"ready": true, "rows": [
+        {"href": "/messages/t/1/", "lines": ["A", "b"], "avatar": "https://evil.com/a.jpg", "avatars": 1},
+        {"href": "/messages/t/2/", "lines": ["B", "b"], "avatars": 1}]})
+    .to_string();
+    let l = parse_conversations(&raw).unwrap().conversations;
+    assert_eq!((l[0].avatar.as_str(), l[1].avatar.as_str()), ("", ""));
 }
