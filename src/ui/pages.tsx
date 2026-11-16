@@ -1,5 +1,5 @@
 import {createRoot} from 'react-dom/client';
-import {useCallback, useEffect, useMemo, useState, type ReactNode} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {requestWithTimeout, type PluginHost} from '../host';
 import {loadZaloAccounts, type ZaloAccountInfo} from '../connectors/zalo';
 import {ConnectGmail, EmailApp, callOp, createHostEmailProvider, type AuthState, type Folder as EmailFolder} from './email';
@@ -7,7 +7,7 @@ import type {Account as EmailAccount} from './email/provider';
 import {GMAIL_ICON} from './email/gmailIcon';
 import {ZALO_ICON} from './chat/zaloIcon';
 import {MESSENGER_ICON} from './chat/messengerIcon';
-import {ChatApp, ZaloQr, MESSENGER_ACCOUNT, createHostZaloProvider, createHostMessengerProvider, type BrowserLoginResult, type MessengerCookies, type ChatChannel, type ChatFolder, type QrLoginStep} from './chat';
+import {ChatApp, ZaloQr, MESSENGER_ACCOUNT, createHostZaloProvider, createHostMessengerProvider, loadMessengerAccount, type MessengerAccountInfo, type BrowserLoginResult, type MessengerCookies, type ChatChannel, type ChatFolder, type QrLoginStep} from './chat';
 import {EmailLogoutDialog, MessengerLogoutDialog, ZaloLogoutDialog} from './LogoutDialogs';
 import {SetupGuide, type SetupItem} from './setup';
 
@@ -119,7 +119,7 @@ const savedClientId = () => { try { return localStorage.getItem(CLIENT_KEY) ?? '
 const saveClientId = (id: string) => { try { localStorage.setItem(CLIENT_KEY, id); } catch { /* bỏ qua */ } };
 
 /** Ảnh đại diện tài khoản Zalo: ảnh CDN (đã lọc https) nếu tải được, không thì chữ cái đầu. */
-function AccountAvatar({account}: {account: ZaloAccountInfo}) {
+function AccountAvatar({account}: {account: {name: string; avatar?: string}}) {
  const [failed, setFailed] = useState(false);
  if (account.avatar && !failed) return <img className="op-shell__acc-ava" src={account.avatar} alt="" width="24" height="24" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
  return <span className="op-shell__acc-ava" aria-hidden="true">{account.name.slice(0, 1).toUpperCase()}</span>;
@@ -150,6 +150,7 @@ function Personal({host}: {host?: PluginHost}) {
  const [logout, setLogout] = useState<{kind: 'email' | 'zalo' | 'messenger'; accountId?: string} | null>(null);
  const [messengerState, setMessengerState] = useState<MessengerStatus['state'] | null>(null);
  const [messengerRev, setMessengerRev] = useState(0);
+ const [messengerAccount, setMessengerAccount] = useState<MessengerAccountInfo | null>(null);
  useEffect(() => {
   if (!host) return;
   let live = true;
@@ -163,13 +164,22 @@ function Personal({host}: {host?: PluginHost}) {
   callOp<MessengerStatus>(host, 'messenger.status').then(r => { if (live) setMessengerState(r.state); }, () => { if (live) setMessengerState(null); });
   return () => { live = false; };
  }, [host, messengerRev]);
+ /** Tên/ảnh thật của tài khoản Facebook (backend có cache 10 phút); lỗi thì giữ nhãn 'Messenger'. */
+ useEffect(() => {
+  if (!host || messengerState !== 'connected') { setMessengerAccount(null); return; }
+  let live = true;
+  loadMessengerAccount(host).then(a => { if (live) setMessengerAccount(a); });
+  return () => { live = false; };
+ }, [host, messengerState, messengerRev]);
+ const messengerAccountName = useRef<string | undefined>(undefined);
+ messengerAccountName.current = messengerAccount?.name;
  const recheckMessenger = useCallback(() => setMessengerRev(r => r + 1), []);
  const messengerLogin = useMemo(() => (host ? {
   start: () => runMessengerLogin(host).then(r => { recheckMessenger(); return r; }),
   cancel: () => { void callOp(host, 'messenger.login.cancel').catch(() => undefined); },
   submit: (c: MessengerCookies) => saveMessengerCookies(host, c).then(recheckMessenger),
  } : undefined), [host, recheckMessenger]);
- const messengerProvider = useMemo(() => (host ? createHostMessengerProvider(host, {onAuthLost: recheckMessenger}) : undefined), [host, recheckMessenger]);
+ const messengerProvider = useMemo(() => (host ? createHostMessengerProvider(host, {onAuthLost: recheckMessenger, accountName: () => messengerAccountName.current}) : undefined), [host, recheckMessenger]);
  /** Tài khoản đang xem: lựa chọn của người dùng nếu còn liên kết, không thì tài khoản đầu tiên (default đứng đầu). */
  const zaloAccount = zaloAccounts.find(a => a.accountId === zaloPick)?.accountId ?? zaloAccounts[0]?.accountId ?? 'default';
  const zaloProvider = useMemo(() => (host ? createHostZaloProvider(host, zaloAccount) : undefined), [host, zaloAccount]);
@@ -197,10 +207,12 @@ function Personal({host}: {host?: PluginHost}) {
  const accountItems = (k: Kind): readonly AccItem[] => {
   if (k === 'zalo') return zaloAccounts.map(a => ({id: a.accountId, name: a.name, lead: <AccountAvatar account={a} />, active: a.accountId === zaloAccount, onSelect: () => { setZaloPick(a.accountId); pick('zalo', 'all'); }, logoutLabel: `Đăng xuất ${a.name}`, onLogout: () => setLogout({kind: 'zalo', accountId: a.accountId})}));
   if (k === 'email') return [
-   {id: '', name: 'Tất cả tài khoản', lead: <span className="op-shell__acc-ava op-shell__acc-ava--all" aria-hidden="true">*</span>, active: emailFilter === '', onSelect: () => { setEmailPick(''); pick('email', 'all'); }},
-   ...emailAccounts.map(a => ({id: a.id, name: a.address, lead: <span className="op-shell__acc-ava" style={{background: a.color}} aria-hidden="true">{a.address.slice(0, 1).toUpperCase()}</span>, active: a.id === emailFilter, onSelect: () => { setEmailPick(a.id); pick('email', 'all'); }, logoutLabel: `Đăng xuất ${a.address}`, onLogout: () => setLogout({kind: 'email', accountId: a.id})})),
+   ...emailAccounts.map(a => ({id: a.id, name: a.address, lead: <span className="op-shell__acc-ava" style={{background: a.color}} aria-hidden="true">{a.address.slice(0, 1).toUpperCase()}</span>, active: a.id === emailFilter, onSelect: () => { setEmailPick(a.id === emailFilter ? '' : a.id); pick('email', 'all'); }, logoutLabel: `Đăng xuất ${a.address}`, onLogout: () => setLogout({kind: 'email', accountId: a.id})})),
   ];
-  if (k === 'messenger') return [{id: MESSENGER_ACCOUNT.id, name: MESSENGER_ACCOUNT.name, lead: <span className="op-shell__acc-ava" aria-hidden="true">{MESSENGER_ACCOUNT.name.slice(0, 1)}</span>, active: true, onSelect: () => pick('messenger', 'all'), logoutLabel: `Đăng xuất ${MESSENGER_ACCOUNT.name}`, onLogout: () => setLogout({kind: 'messenger'})}];
+  if (k === 'messenger') {
+   const name = messengerAccount?.name || MESSENGER_ACCOUNT.name;
+   return [{id: MESSENGER_ACCOUNT.id, name, lead: <AccountAvatar key={messengerAccount?.avatar ?? ''} account={{name, avatar: messengerAccount?.avatar}} />, active: true, onSelect: () => pick('messenger', 'all'), logoutLabel: `Đăng xuất ${name}`, onLogout: () => setLogout({kind: 'messenger'})}];
+  }
   return [];
  };
  const catsOf = (k: Kind): ReadonlyArray<[AnyFolder, string]> => CATS[k];

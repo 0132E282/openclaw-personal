@@ -39,7 +39,7 @@ const chatReason = Type.Union([
  Type.Literal('invalid-input'),
 ]);
 const folder = Type.Union([Type.Literal('all'), Type.Literal('unread'), Type.Literal('group'), Type.Literal('stranger'), Type.Literal('blocked'), Type.Literal('spam')]);
-const conversationId = Type.String({pattern: '^[0-9]{1,30}$', maxLength: 30});
+const conversationId = Type.String({pattern: '^(e2ee-)?[0-9]{1,30}$', maxLength: 36});
 const conversation = Type.Object(
  {
   id: conversationId,
@@ -74,9 +74,11 @@ export const BACKEND_OPERATION_IDS = {
  messengerCookiesSet: 'messenger.cookies.set',
  messengerCookiesClear: 'messenger.cookies.clear',
  messengerStatus: 'messenger.status',
+ messengerAccount: 'messenger.account',
  messengerConversations: 'messenger.conversations',
  messengerMessages: 'messenger.messages',
  messengerSend: 'messenger.send',
+ messengerE2eeUnlock: 'messenger.e2ee.unlock',
 } as const;
 
 export const backendOperations = {
@@ -135,9 +137,15 @@ export const backendOperations = {
   input: Empty,
   output: Type.Object({state: Type.Union([Type.Literal('connected'), Type.Literal('expired'), Type.Literal('no-cookies')]), reason: Type.Union([chatReason, Type.Null()])}, strict),
  },
+ [BACKEND_OPERATION_IDS.messengerAccount]: {
+  kind: 'query',
+  description: 'Tên và ảnh đại diện của chính tài khoản Facebook đang đăng nhập (đọc từ menu tài khoản trên trang Messenger, cache 10 phút). avatar là URL https fbcdn hoặc rỗng.',
+  input: Empty,
+  output: Type.Object({ok: Type.Boolean(), name: Type.String({maxLength: 80}), avatar: Type.String({maxLength: 600}), reason: Type.Optional(chatReason)}, strict),
+ },
  [BACKEND_OPERATION_IDS.messengerConversations]: {
   kind: 'query',
-  description: 'Danh sách hội thoại Messenger (đọc qua trình duyệt ẩn, có cache và giới hạn tần suất). Chat mã hóa đầu-cuối bị ẩn và chỉ được đếm trong e2eeHidden.',
+  description: 'Danh sách hội thoại Messenger (đọc qua trình duyệt ẩn, có cache và giới hạn tần suất). Chat mã hóa đầu-cuối (đã mở khóa bằng PIN) được liệt kê với id e2ee-<id>; e2eeHidden giữ để tương thích, luôn 0.',
   input: Type.Object({folder: Type.Optional(folder)}, strict),
   output: Type.Object({ok: Type.Boolean(), reason: Type.Optional(chatReason), conversations: Type.Array(conversation, {maxItems: 100}), e2eeHidden: Type.Integer({minimum: 0})}, strict),
  },
@@ -152,6 +160,12 @@ export const backendOperations = {
   description: 'Gửi một tin văn bản vào hội thoại Messenger bằng cách gõ vào ô soạn như người dùng (có trần tốc độ, không dùng để gửi hàng loạt).',
   input: Type.Object({conversationId, text: Type.String({minLength: 1, maxLength: 4000})}, strict),
   output: Type.Object({ok: Type.Boolean(), reason: Type.Optional(chatReason)}, strict),
+ },
+ [BACKEND_OPERATION_IDS.messengerE2eeUnlock]: {
+  kind: 'action',
+  description: 'Mở cửa sổ Chrome để người dùng tự nhập mã PIN khôi phục chat mã hóa đầu-cuối (trả ngay; PIN không đi qua plugin). Đọc Messenger tạm dừng tới khi cửa sổ đóng.',
+  input: Empty,
+  output: LoginStatus,
  },
 } as const;
 

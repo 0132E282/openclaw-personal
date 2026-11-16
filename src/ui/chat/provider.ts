@@ -49,6 +49,10 @@ export type ChatAccess = 'write' | 'read' | 'none';
 export interface ChatProvider {
   listAccounts(): Promise<ChatAccount[]>;
   listConversations(query: {folder: ChatFolder}): Promise<ChatConversation[]>;
+  /** Ghi chú về lần tải danh sách gần nhất (vd. số chat bị ẩn); rỗng thì không hiện. */
+  listNotice?(): string;
+  /** Mở cửa sổ để người dùng tự nhập mã PIN mở khóa chat mã hóa; ném ChatError khi không mở được. */
+  unlockE2ee?(): Promise<void>;
   getMessages(conversationId: string): Promise<ChatMessage[]>;
   send(conversationId: string, text: string): Promise<void>;
   /** Gửi tệp (kèm chú thích tùy chọn); không có thì UI không hiện nút đính kèm. */

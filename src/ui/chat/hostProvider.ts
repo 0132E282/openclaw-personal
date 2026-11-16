@@ -162,6 +162,21 @@ export function messengerTimeToIso(label: string, now: Date = new Date()): strin
 
 interface MessengerResult {ok: boolean; reason?: string}
 
+/** Tên + ảnh đại diện của chính tài khoản Facebook đang đăng nhập. */
+export interface MessengerAccountInfo {name: string; avatar: string}
+
+/** Lấy tên/ảnh tài khoản Messenger; `null` khi chưa lấy được (lỗi, chưa đăng nhập, Facebook đổi giao diện): UI dùng nhãn 'Messenger'. */
+export async function loadMessengerAccount(host: PluginHost): Promise<MessengerAccountInfo | null> {
+ try {
+  const r = await callOp<{ok?: boolean; name?: unknown; avatar?: unknown}>(host, 'messenger.account', {}, MESSENGER_TIMEOUT);
+  const name = typeof r?.name === 'string' ? r.name.trim() : '';
+  if (r?.ok !== true || !name) return null;
+  return {name, avatar: typeof r.avatar === 'string' && r.avatar.startsWith('https://') ? r.avatar : ''};
+ } catch {
+  return null;
+ }
+}
+
 /**
  * Provider Messenger thật: đọc/gửi qua các operation `messenger.*` (trình duyệt ẩn trong dịch vụ Rust).
  * Chỉ hỗ trợ văn bản; chưa có ảnh/tệp, chat mã hóa đầu-cuối, tin chờ/đã chặn/spam.
@@ -170,7 +185,8 @@ interface MessengerResult {ok: boolean; reason?: string}
 /** Lần đọc đầu tiên mở Chrome ẩn nên lâu hơn các op khác. */
 const MESSENGER_TIMEOUT = 60_000;
 
-export function createHostMessengerProvider(host: PluginHost, opts: {onAuthLost?: () => void} = {}): ChatProvider {
+export function createHostMessengerProvider(host: PluginHost, opts: {onAuthLost?: () => void; accountName?: () => string | undefined} = {}): ChatProvider {
+ let e2eeHidden = 0;
  const check = (r: MessengerResult): void => {
   if (r.ok) return;
   const reason = r.reason ?? 'launch-failed';
@@ -188,11 +204,17 @@ export function createHostMessengerProvider(host: PluginHost, opts: {onAuthLost?
   },
   emptyHistoryText: 'Chưa đọc được tin nào trong hội thoại này. Bạn vẫn có thể gửi tin mới.',
   async listAccounts() {
-   return [MESSENGER_ACCOUNT];
+   return [{id: MESSENGER_ACCOUNT.id, name: opts.accountName?.() || MESSENGER_ACCOUNT.name}];
+  },
+  listNotice: () => (e2eeHidden > 0 ? `${e2eeHidden} cuộc trò chuyện mã hóa đầu-cuối đang bị ẩn vì cần mã PIN của Facebook nên Hộp thư chưa đọc được.` : ''),
+  async unlockE2ee() {
+   const r = await callOp<{phase: string; reason?: string | null}>(host, 'messenger.e2ee.unlock', {}, MESSENGER_TIMEOUT);
+   check({ok: !r.reason, ...(r.reason ? {reason: r.reason} : {})} as MessengerResult);
   },
   async listConversations({folder}: {folder: ChatFolder}): Promise<ChatConversation[]> {
-   const r = await callOp<MessengerResult & {conversations: Array<{id: string; title: string; snippet: string; time: string; unread: boolean; isGroup: boolean; avatar?: string}>}>(host, 'messenger.conversations', {folder}, MESSENGER_TIMEOUT);
+   const r = await callOp<MessengerResult & {e2eeHidden?: number; conversations: Array<{id: string; title: string; snippet: string; time: string; unread: boolean; isGroup: boolean; avatar?: string}>}>(host, 'messenger.conversations', {folder}, MESSENGER_TIMEOUT);
    check(r);
+   e2eeHidden = r.e2eeHidden ?? 0;
    return r.conversations.map(c => ({id: c.id, accountId: MESSENGER_ACCOUNT.id, name: c.title, kind: c.isGroup ? 'group' : 'direct', preview: c.snippet, lastAt: messengerTimeToIso(c.time), unread: c.unread ? 1 : 0, ...(c.avatar ? {avatarUrl: c.avatar} : {})}));
   },
   async getMessages(conversationId: string): Promise<ChatMessage[]> {

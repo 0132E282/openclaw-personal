@@ -35,7 +35,6 @@
 .op-shell__accrow{display:flex;align-items:center}
 .op-shell__nav .op-shell__accrow .op-shell__acc{flex:1;min-width:0;width:auto}
 .op-shell__acc-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.op-shell__acc-ava--all{background:#a8a29e}
 .op-shell__nav .op-shell__acc-out{flex:none;display:grid;place-items:center;padding:8px 10px;opacity:.5}
 .op-shell__nav .op-shell__acc-out:hover{opacity:1;color:#b5402f}
 

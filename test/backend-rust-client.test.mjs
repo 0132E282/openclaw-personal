@@ -85,9 +85,9 @@ test('stop() gửi SIGTERM cho tiến trình con',async()=>{
  const env=fakeEnv();const c=mk(env);await c.call('a',{});c.stop();
  assert.deepEqual(env.spawned[0].child.killed,['SIGTERM']);
 });
-test('handlers: chuyển nguyên input, đủ 20 op',async()=>{
+test('handlers: chuyển nguyên input, đủ 21 op',async()=>{
  const env=fakeEnv();const h=createRustHandlers({core:mk(env)});
- assert.equal(Object.keys(h).length,20);
+ assert.equal(Object.keys(h).length,22);
  const input={account:'a1',cookies:[{name:'xs',value:'v'}]};
  const r=await h['messenger.cookies.set'](input);
  const rpc=env.calls.find(c=>c.url.endsWith('/rpc'));

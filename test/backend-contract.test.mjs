@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadTs} from './_load.mjs';
 const {backendOperations:ops,BACKEND_OPERATION_IDS:ids}=await loadTs('src/connectors/backend/contract.ts');
-test('đủ 11 operation với kind đúng và input/output là schema',()=>{
- const kinds={'setup.check':'query','notify.send':'action','messenger.login.start':'action','messenger.login.status':'query','messenger.login.cancel':'action','messenger.cookies.set':'action','messenger.cookies.clear':'action','messenger.status':'query','messenger.conversations':'query','messenger.messages':'query','messenger.send':'action'};
+test('đủ 12 operation với kind đúng và input/output là schema',()=>{
+ const kinds={'setup.check':'query','notify.send':'action','messenger.login.start':'action','messenger.login.status':'query','messenger.login.cancel':'action','messenger.cookies.set':'action','messenger.cookies.clear':'action','messenger.status':'query','messenger.account':'query','messenger.conversations':'query','messenger.messages':'query','messenger.send':'action','messenger.e2ee.unlock':'action'};
  assert.deepEqual(Object.keys(ops).sort(),Object.keys(kinds).sort());
  for(const [id,k] of Object.entries(kinds)){assert.equal(ops[id].kind,k);assert.equal(ops[id].input.type,'object');assert.equal(ops[id].output.type,'object');assert.equal(ops[id].input.additionalProperties,false);}
  assert.equal(ids.messengerCookiesSet,'messenger.cookies.set');
@@ -17,14 +17,24 @@ test('messenger.status/conversations/messages/send: schema nhận mẫu đúng, 
  assert.ok(ok('messenger.status','output',{state:'expired',reason:'not-logged-in'}));
  assert.ok(ok('messenger.status','output',{state:'connected',reason:null}));
  assert.ok(!ok('messenger.status','output',{state:'lạ',reason:null}));
+ assert.ok(ok('messenger.account','input',{}));
+ assert.ok(!ok('messenger.account','input',{account:'x'}));
+ assert.ok(ok('messenger.account','output',{ok:true,name:'Nguyễn Phúc',avatar:'https://scontent.x.fbcdn.net/a.jpg'}));
+ assert.ok(ok('messenger.account','output',{ok:false,name:'',avatar:'',reason:'selector-broken'}));
+ assert.ok(!ok('messenger.account','output',{ok:true,name:'x'.repeat(81),avatar:''}));
+ assert.ok(!ok('messenger.account','output',{ok:true,name:'A',avatar:'',cookie:'x'}));
  assert.ok(ok('messenger.conversations','input',{}));
  assert.ok(ok('messenger.conversations','input',{folder:'unread'}));
  assert.ok(!ok('messenger.conversations','input',{folder:'../x'}));
- const c={id:'1',title:'An',snippet:'hi',time:'5 phút',unread:true,isGroup:false};
+ const c={id:'1',title:'An',snippet:'hi',time:'5 phút',unread:true,isGroup:false,avatar:''};
  assert.ok(ok('messenger.conversations','output',{ok:true,conversations:[c],e2eeHidden:0}));
  assert.ok(ok('messenger.conversations','output',{ok:false,reason:'selector-broken',conversations:[],e2eeHidden:0}));
  assert.ok(!ok('messenger.conversations','output',{ok:true,conversations:[{...c,cookie:'x'}],e2eeHidden:0}));
  assert.ok(!ok('messenger.messages','input',{conversationId:'a/b'}));
+ assert.ok(ok('messenger.messages','input',{conversationId:'e2ee-123'}));
+ assert.ok(ok('messenger.conversations','output',{ok:true,conversations:[{...c,id:'e2ee-123'}],e2eeHidden:0}));
+ assert.ok(!ok('messenger.messages','input',{conversationId:'e2ee-'}));
+ assert.ok(!ok('messenger.messages','input',{conversationId:'x-123'}));
  assert.ok(ok('messenger.messages','output',{ok:true,messages:[{id:'m0',from:'me',senderName:'',text:'x',time:''}]}));
  assert.ok(!ok('messenger.messages','output',{ok:true,messages:[{id:'m0',from:'ai',senderName:'',text:'x',time:''}]}));
  assert.ok(ok('messenger.send','input',{conversationId:'12',text:'xin chào'}));

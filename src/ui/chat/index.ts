@@ -3,5 +3,6 @@ export {CookieModal, type CookieModalProps} from './CookieModal';
 export {NotConnected, type NotConnectedProps} from './NotConnected';
 export {ZaloQr, safeQr, type ZaloQrProps, type QrLoginStep} from './ZaloQr';
 export type {ChatProvider, ChatChannel, ChatFolder, ChatAccount, ChatConversation, ChatMessage, MessengerCookies, BrowserLoginResult, HistoryNotice} from './provider';
-export {createHostZaloProvider, createHostMessengerProvider, MESSENGER_ACCOUNT, messengerTimeToIso} from './hostProvider';
+export {createHostZaloProvider, createHostMessengerProvider, loadMessengerAccount, MESSENGER_ACCOUNT, messengerTimeToIso} from './hostProvider';
+export type {MessengerAccountInfo} from './hostProvider';
 export {ChatError} from './provider';

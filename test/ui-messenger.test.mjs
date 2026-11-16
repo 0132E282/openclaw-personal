@@ -92,6 +92,25 @@ test('UI Messenger: danh sách, tin nhắn, gửi tin và hiện lý do khi đ�
  assert.ok(m2.el.querySelector('[role=alert]').textContent.includes('đổi giao diện'));
  await m2.unmount();
 });
+test('UI Messenger: chat mã hóa bị ẩn -> nút nhập PIN gọi messenger.e2ee.unlock rồi hiện hướng dẫn',async()=>{
+ const f=fakeHost({'messenger.conversations':CONVS,'messenger.messages':MSGS,'messenger.e2ee.unlock':{phase:'running',reason:null}});
+ const m=await mount({channel:'messenger',folder:'all',provider:createHostMessengerProvider(f.host),pollMs:{messages:0,conversations:0}});
+ await click(btn(m.el,'Nhập mã PIN để mở khóa'));await tick();
+ assert.deepEqual(f.calls.filter(c=>c[0]==='messenger.e2ee.unlock'),[['messenger.e2ee.unlock',{}]]);
+ assert.ok(m.el.textContent.includes('Đã mở cửa sổ Chrome — nhập PIN xong thì đóng cửa sổ rồi bấm Tải lại'));
+ assert.equal(btn(m.el,'Nhập mã PIN để mở khóa'),undefined);
+ await m.unmount();
+ const none=fakeHost({'messenger.conversations':{...CONVS,e2eeHidden:0},'messenger.messages':MSGS});
+ const m2=await mount({channel:'messenger',folder:'all',provider:createHostMessengerProvider(none.host),pollMs:{messages:0,conversations:0}});
+ assert.equal(btn(m2.el,'Nhập mã PIN để mở khóa'),undefined);
+ await m2.unmount();
+ const bad=fakeHost({'messenger.conversations':CONVS,'messenger.messages':MSGS,'messenger.e2ee.unlock':{phase:'failed',reason:'browser-missing'}});
+ const m3=await mount({channel:'messenger',folder:'all',provider:createHostMessengerProvider(bad.host),pollMs:{messages:0,conversations:0}});
+ await click(btn(m3.el,'Nhập mã PIN để mở khóa'));await tick();
+ assert.ok(m3.el.querySelector('[role=alert]').textContent.includes('Chrome'));
+ assert.ok(btn(m3.el,'Nhập mã PIN để mở khóa'));
+ await m3.unmount();
+});
 test('UI Messenger: polling nhẹ gọi lại theo chu kỳ',async()=>{
  const f=fakeHost({'messenger.conversations':CONVS,'messenger.messages':MSGS});
  const m=await mount({channel:'messenger',folder:'all',provider:createHostMessengerProvider(f.host),pollMs:{messages:30,conversations:30}});

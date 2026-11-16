@@ -12,7 +12,7 @@ use tokio::time::{sleep, timeout, Instant};
 
 use super::cookies::{CookieStore, StoredCookie};
 use super::login::LaunchError;
-use super::selectors::{self, Conversation, Message, Probe};
+use super::selectors::{self, AccountInfo, Conversation, Message, Probe};
 use super::DEFAULT_ACCOUNT;
 
 /// Lý do cố định, an toàn để hiện cho người dùng.
@@ -84,6 +84,8 @@ pub trait PageLauncher: Send + Sync {
 #[derive(Clone, Copy)]
 pub struct ChatConfig {
     pub cache_ttl: Duration,
+    /// Tên/ảnh tài khoản gần như không đổi: giữ lâu để UI gọi nhiều lần không mở lại trang.
+    pub account_ttl: Duration,
     pub min_interval: Duration,
     pub idle_timeout: Duration,
     pub op_timeout: Duration,
@@ -98,6 +100,7 @@ impl Default for ChatConfig {
     fn default() -> Self {
         Self {
             cache_ttl: Duration::from_secs(25),
+            account_ttl: Duration::from_secs(10 * 60),
             min_interval: Duration::from_secs(1),
             idle_timeout: Duration::from_secs(5 * 60),
             op_timeout: Duration::from_secs(25),
@@ -128,6 +131,7 @@ struct Inner {
     last_op: Option<Instant>,
     convs: Option<(Instant, Vec<Conversation>, usize)>,
     msgs: HashMap<String, (Instant, Vec<Message>)>,
+    account: Option<(Instant, AccountInfo)>,
     sends: VecDeque<Instant>,
     reaper: bool,
 }
@@ -176,7 +180,9 @@ impl MessengerChat {
     /// Cookie đổi (nhập mới/đăng xuất): bỏ cờ hết hạn, đóng phiên và xóa cache.
     pub async fn reset(&self) {
         *self.expired.lock().unwrap() = None;
-        self.inner.lock().await.close().await;
+        let mut g = self.inner.lock().await;
+        g.close().await;
+        g.account = None;
     }
 
     pub async fn conversations(&self, launcher: &dyn PageLauncher, store: &CookieStore, folder: &str) -> Result<ConversationList, Reason> {
@@ -196,6 +202,57 @@ impl MessengerChat {
             g.convs = Some((Instant::now(), r.conversations.clone(), r.e2ee_hidden));
         }
         Ok(filter_folder(&r.conversations, folder, r.e2ee_hidden))
+    }
+
+    /// Tên + ảnh đại diện của chính tài khoản đang đăng nhập (cache `account_ttl`). Tái dùng trang hiện tại, chỉ mở
+    /// menu tài khoản bằng JS; không đọc được thì `SelectorBroken` mà KHÔNG đóng phiên (đây chỉ là thông tin phụ).
+    pub async fn account(&self, launcher: &dyn PageLauncher, store: &CookieStore) -> Result<AccountInfo, Reason> {
+        let mut g = self.inner.lock().await;
+        if let Some((at, info)) = &g.account {
+            if at.elapsed() < self.cfg.account_ttl {
+                return Ok(info.clone());
+            }
+        }
+        let r = match timeout(self.cfg.op_timeout, self.fetch_account(&mut g, launcher, store)).await {
+            Ok(r) => r,
+            Err(_) => Err(Reason::Timeout),
+        };
+        let info = match r {
+            Err(Reason::SelectorBroken) => {
+                g.last_op = Some(Instant::now());
+                return Err(Reason::SelectorBroken);
+            }
+            r => self.settle(&mut g, r).await?,
+        };
+        g.account = Some((Instant::now(), info.clone()));
+        Ok(info)
+    }
+
+    async fn fetch_account(&self, g: &mut Inner, launcher: &dyn PageLauncher, store: &CookieStore) -> Result<AccountInfo, Reason> {
+        self.prepare(g, launcher, store).await?;
+        let page = g.session.as_mut().expect("prepare đã mở phiên").as_mut();
+        // Đang ở bất kỳ trang facebook.com nào (danh sách hay hội thoại) thì dùng luôn, không tải lại.
+        if !page.url().await.map_err(reason_of)?.starts_with("https://www.facebook.com/") {
+            page.goto(selectors::MESSAGES_URL).await.map_err(reason_of)?;
+        }
+        self.wait_ready(page, false, |p| p.list).await?;
+        let opened = page.eval(selectors::ACCOUNT_OPEN_JS).await.map_err(reason_of)?;
+        let found = serde_json::from_str::<serde_json::Value>(&opened).map_err(|_| Reason::SelectorBroken)?["found"] == true;
+        let mut info = None;
+        if found {
+            let deadline = Instant::now() + self.cfg.ready_timeout;
+            loop {
+                if let Ok(raw) = page.eval(selectors::ACCOUNT_READ_JS).await {
+                    info = selectors::parse_account(&raw)?;
+                }
+                if info.is_some() || Instant::now() >= deadline {
+                    break;
+                }
+                sleep(self.cfg.ready_poll).await;
+            }
+            let _ = page.eval(selectors::ACCOUNT_CLOSE_JS).await;
+        }
+        info.ok_or(Reason::SelectorBroken)
     }
 
     pub async fn messages(&self, launcher: &dyn PageLauncher, store: &CookieStore, conversation_id: &str) -> Result<Vec<Message>, Reason> {
@@ -326,7 +383,9 @@ impl MessengerChat {
     async fn open_thread(&self, page: &mut dyn ChatPage, id: &str) -> Result<(), Reason> {
         let url = selectors::thread_url(id).ok_or(Reason::InvalidInput)?;
         let cur = page.url().await.map_err(reason_of)?;
-        if !cur.contains(&format!("/messages/t/{id}")) {
+        let (num, e2ee) = selectors::split_conversation_id(id).ok_or(Reason::InvalidInput)?;
+        let want = if e2ee { format!("/messages/e2ee/t/{num}") } else { format!("/messages/t/{num}") };
+        if !cur.contains(&want) {
             page.goto(&url).await.map_err(reason_of)?;
         }
         self.wait_ready(page, true, |p| p.composer).await?;

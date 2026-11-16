@@ -1,11 +1,13 @@
 //! Module `messenger`: cookie Messenger (kho bí mật) và đăng nhập bằng trình duyệt thật.
 //! Ops: `messenger.login.start|status|cancel`, `messenger.cookies.set|clear`,
-//! `messenger.status|conversations|messages|send` (đọc/gửi qua trình duyệt headless, xem `chat`).
+//! `messenger.e2ee.unlock|status|cancel` (mở Chrome hiện để nhập PIN khôi phục chat mã hóa),
+//! `messenger.status|account|conversations|messages|send` (đọc/gửi qua trình duyệt headless, xem `chat`).
 //! Output không bao giờ chứa cookie.
 
 pub mod chat;
 pub mod chat_chromium;
 pub mod cookies;
+pub mod e2ee;
 pub mod login;
 pub mod selectors;
 
@@ -23,6 +25,11 @@ pub const DEFAULT_ACCOUNT: &str = "default";
 fn controller() -> &'static LoginController {
     static C: OnceLock<LoginController> = OnceLock::new();
     C.get_or_init(LoginController::new)
+}
+
+fn e2ee_controller() -> &'static e2ee::E2eeController {
+    static C: OnceLock<e2ee::E2eeController> = OnceLock::new();
+    C.get_or_init(e2ee::E2eeController::new)
 }
 
 fn chat() -> &'static MessengerChat {
@@ -55,6 +62,10 @@ pub async fn chat_op(op: &str, input: &Value, store: &CookieStore, svc: &Messeng
                 Err(r) => json!({"ok": false, "reason": r.as_str(), "conversations": [], "e2eeHidden": 0}),
             })
         }
+        "messenger.account" => Ok(match svc.account(launcher, store).await {
+            Ok(a) => json!({"ok": true, "name": a.name, "avatar": a.avatar}),
+            Err(r) => json!({"ok": false, "name": "", "avatar": "", "reason": r.as_str()}),
+        }),
         "messenger.messages" => {
             let Some(id) = input.get("conversationId").and_then(Value::as_str) else {
                 return Some(Err(RpcError::invalid_input("conversationId không hợp lệ")));
@@ -139,8 +150,11 @@ async fn clear_cookies(input: &Value, ctx: &Ctx) -> RpcResult {
 }
 
 pub async fn handle(op: &str, input: Value, ctx: &Ctx) -> Option<RpcResult> {
-    let launcher = ChromiumPageLauncher { profile_dir: profile_dir(ctx) };
-    if let Some(r) = chat_op(op, &input, &CookieStore::new(ctx.secrets.clone()), chat(), &launcher).await {
+    let launcher = ChromiumPageLauncher { profile_dir: profile_dir(ctx), visible: false };
+    // Đang mở Chrome hiện để nhập PIN: đọc/gửi không được mở Chrome ẩn (sẽ đóng cửa sổ của người dùng).
+    let busy = e2ee::BusyLauncher;
+    let l: &dyn PageLauncher = if e2ee_controller().status().phase == login::Phase::Running { &busy } else { &launcher };
+    if let Some(r) = chat_op(op, &input, &CookieStore::new(ctx.secrets.clone()), chat(), l).await {
         return Some(r);
     }
     Some(match op {
@@ -158,6 +172,16 @@ pub async fn handle(op: &str, input: Value, ctx: &Ctx) -> Option<RpcResult> {
                 Ok(out)
             }
         },
+        "messenger.e2ee.unlock" => {
+            // Đóng phiên ẩn đang giữ thư mục trình duyệt rồi mở cửa sổ hiện cùng thư mục đó.
+            chat().reset().await;
+            let visible: Arc<dyn PageLauncher> = Arc::new(ChromiumPageLauncher { profile_dir: profile_dir(ctx), visible: true });
+            let after: e2ee::After = Box::new(|| Box::pin(async { chat().reset().await }));
+            let st = e2ee_controller().start(visible, CookieStore::new(ctx.secrets.clone()), e2ee::E2eeConfig::default(), after);
+            Ok(st.to_json())
+        }
+        "messenger.e2ee.status" => Ok(e2ee_controller().status().to_json()),
+        "messenger.e2ee.cancel" => Ok(e2ee_controller().cancel().await.to_json()),
         "messenger.login.status" => Ok(controller().status().to_json()),
         "messenger.login.cancel" => Ok(controller().cancel().await.to_json()),
         _ if op.starts_with("messenger.") => Err(RpcError::not_implemented(op)),
@@ -170,3 +194,6 @@ mod tests;
 
 #[cfg(test)]
 mod chat_tests;
+
+#[cfg(test)]
+mod e2ee_tests;

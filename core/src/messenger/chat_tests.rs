@@ -59,6 +59,7 @@ struct FakeState {
     force_url: Option<String>,
     list_json: String,
     messages_json: String,
+    account_json: String,
     composer_empties: bool,
     eval_delay: Duration,
     gotos: Vec<String>,
@@ -92,6 +93,7 @@ fn fake_state() -> Shared {
         force_url: None,
         list_json: list_raw(),
         messages_json: json!({"ready": true, "rows": [{"text": "hello", "mine": false, "sender": "An"}, {"text": "chào", "mine": true, "sender": ""}]}).to_string(),
+        account_json: json!({"name": "Nguyễn Phúc", "avatar": "https://scontent.fsgn5-3.fna.fbcdn.net/v/a.jpg?x=1", "cardAvatar": ""}).to_string(),
         composer_empties: true,
         eval_delay: Duration::ZERO,
         gotos: vec![],
@@ -133,6 +135,12 @@ impl ChatPage for FakePage {
             s.list_json.clone()
         } else if js == selectors::MESSAGES_JS {
             s.messages_json.clone()
+        } else if js == selectors::ACCOUNT_OPEN_JS {
+            json!({"found": true}).to_string()
+        } else if js == selectors::ACCOUNT_READ_JS {
+            s.account_json.clone()
+        } else if js == selectors::ACCOUNT_CLOSE_JS {
+            "{}".to_string()
         } else {
             json!({"found": true, "empty": s.composer_empties}).to_string()
         })
@@ -177,6 +185,7 @@ impl PageLauncher for FakeLauncher {
 fn cfg() -> ChatConfig {
     ChatConfig {
         cache_ttl: Duration::from_millis(250),
+        account_ttl: Duration::from_millis(250),
         min_interval: Duration::from_millis(40),
         idle_timeout: Duration::from_millis(120),
         op_timeout: Duration::from_millis(600),
@@ -192,8 +201,9 @@ fn cfg() -> ChatConfig {
 #[test]
 fn parse_conversations_chuan_hoa() {
     let l = parse_conversations(&list_raw()).unwrap();
-    assert_eq!(l.e2ee_hidden, 1);
-    assert_eq!(l.conversations.len(), 2);
+    assert_eq!(l.e2ee_hidden, 0);
+    assert_eq!(l.conversations.len(), 3);
+    assert_eq!(l.conversations[2].id, "e2ee-333");
     let a = &l.conversations[0];
     assert_eq!((a.id.as_str(), a.title.as_str(), a.snippet.as_str(), a.time.as_str(), a.unread, a.is_group), ("111", "An", "chào bạn", "5 phút", true, false));
     assert!(l.conversations[1].is_group);
@@ -257,8 +267,11 @@ fn classify_anh_xa_ly_do() {
     assert_eq!(classify(&Probe { url: "https://www.facebook.com/checkpoint/1501/".into(), login_form: true, ..base.clone() }, false), Err(Reason::Checkpoint));
     assert_eq!(classify(&Probe { pin: true, ..base.clone() }, false), Err(Reason::E2eeLocked));
     let e2ee = Probe { url: "https://www.facebook.com/messages/e2ee/t/5/".into(), ..base };
-    assert_eq!(classify(&e2ee, true), Err(Reason::E2eeLocked));
+    assert_eq!(classify(&e2ee, true), Ok(()));
     assert_eq!(classify(&e2ee, false), Ok(()));
+    let lock = Probe { url: "https://www.facebook.com/messages/e2ee/".into(), ..e2ee.clone() };
+    assert_eq!(classify(&lock, true), Err(Reason::E2eeLocked));
+    assert_eq!(classify(&lock, false), Ok(()));
 }
 
 #[test]
@@ -268,6 +281,10 @@ fn id_va_url_hoi_thoai_chat_che() {
         assert!(thread_url(bad).is_none(), "{bad}");
     }
     assert_eq!(conversation_id_of_href("https://www.facebook.com/messages/e2ee/t/77/"), Some(("77".into(), true)));
+    assert_eq!(thread_url("e2ee-123").as_deref(), Some("https://www.facebook.com/messages/e2ee/t/123/"));
+    for bad in ["e2ee-", "e2ee-abc", "e2ee-e2ee-1", "e2ee/1", "E2EE-1", &format!("e2ee-{}", "1".repeat(31))] {
+        assert!(thread_url(bad).is_none(), "{bad}");
+    }
     assert_eq!(conversation_id_of_href("/messages/t/88"), Some(("88".into(), false)));
 }
 
@@ -306,7 +323,7 @@ async fn doc_danh_sach_loc_thu_muc_va_cache() {
     let st = fake_state();
     let l = FakeLauncher::new(&st);
     let all = chat.conversations(&l, &store, "all").await.unwrap();
-    assert_eq!((all.conversations.len(), all.e2ee_hidden), (2, 1));
+    assert_eq!((all.conversations.len(), all.e2ee_hidden), (3, 0));
     assert_eq!(st.lock().unwrap().gotos, vec!["https://www.facebook.com/messages/"]);
     assert_eq!(*l.cookies_seen.lock().unwrap(), vec!["c_user", "xs"]);
     let evals = st.lock().unwrap().evals;
@@ -380,8 +397,13 @@ async fn doc_tin_di_dung_hoi_thoai_va_chan_id_xau() {
     assert_eq!((m.len(), m[0].from_me, m[1].from_me), (2, false, true));
     assert_eq!(st.lock().unwrap().gotos, vec!["https://www.facebook.com/messages/t/111/"]);
     // Chat mã hóa đầu-cuối: Facebook chuyển sang /messages/e2ee/ -> e2ee-locked, vẫn giữ phiên.
-    st.lock().unwrap().redirect_thread_to = Some("https://www.facebook.com/messages/e2ee/t/333/".into());
+    st.lock().unwrap().redirect_thread_to = Some("https://www.facebook.com/messages/e2ee/".into());
     assert_eq!(chat.messages(&l, &store, "333").await.err(), Some(Reason::E2eeLocked));
+    // Chat mã hóa đã mở khóa: id `e2ee-<id>` mở đúng URL e2ee và đọc như chat thường.
+    st.lock().unwrap().redirect_thread_to = None;
+    let m = chat.messages(&l, &store, "e2ee-333").await.unwrap();
+    assert_eq!(m.len(), 2);
+    assert_eq!(st.lock().unwrap().gotos.last().unwrap(), "https://www.facebook.com/messages/e2ee/t/333/");
     assert_eq!((l.opened(), chat.status(&store).await.state), (1, "connected"));
 }
 
@@ -560,4 +582,74 @@ fn avatar_chi_nhan_https_host_facebook() {
     .to_string();
     let l = parse_conversations(&raw).unwrap().conversations;
     assert_eq!((l[0].avatar.as_str(), l[1].avatar.as_str()), ("", ""));
+}
+
+#[test]
+fn parse_account_chuan_hoa() {
+    use super::selectors::{parse_account, AccountInfo};
+    let ok = parse_account(&json!({"name": "  Nguyễn Phúc ", "avatar": "https://scontent.x.fbcdn.net/a.jpg", "cardAvatar": ""}).to_string()).unwrap();
+    assert_eq!(ok, Some(AccountInfo { name: "Nguyễn Phúc".into(), avatar: "https://scontent.x.fbcdn.net/a.jpg".into() }));
+    // Ảnh nút bị lọc (host lạ) thì rơi về ảnh trong thẻ /me/.
+    let fb = parse_account(&json!({"name": "A", "avatar": "https://evil.com/a.jpg", "cardAvatar": "https://scontent.x.fbcdn.net/b.jpg"}).to_string()).unwrap().unwrap();
+    assert_eq!(fb.avatar, "https://scontent.x.fbcdn.net/b.jpg");
+    let none = parse_account(&json!({"name": "A", "avatar": "data:x"}).to_string()).unwrap().unwrap();
+    assert_eq!(none.avatar, "");
+    let long = parse_account(&json!({"name": "ă".repeat(200)}).to_string()).unwrap().unwrap();
+    assert_eq!(long.name.chars().count(), 80);
+    assert_eq!(parse_account(&json!({"name": ""}).to_string()).unwrap(), None);
+    assert_eq!(parse_account(&json!({"name": "a\u{7}b"}).to_string()).unwrap(), None);
+    assert!(parse_account("không phải json").is_err());
+}
+
+#[tokio::test]
+async fn account_lay_ten_anh_cache_va_reset() {
+    let chat = MessengerChat::new(ChatConfig { idle_timeout: Duration::from_secs(60), ..cfg() });
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l = FakeLauncher::new(&st);
+    let a = chat.account(&l, &store).await.unwrap();
+    assert_eq!((a.name.as_str(), a.avatar.as_str()), ("Nguyễn Phúc", "https://scontent.fsgn5-3.fna.fbcdn.net/v/a.jpg?x=1"));
+    let evals = st.lock().unwrap().evals;
+    // Gọi lại trong TTL: không eval thêm, không mở lại trang.
+    assert_eq!(chat.account(&l, &store).await.unwrap(), a);
+    assert_eq!((st.lock().unwrap().evals, l.opened()), (evals, 1));
+    // Hết TTL: đọc lại nhưng tái dùng trang (không goto thêm).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    chat.account(&l, &store).await.unwrap();
+    assert_eq!((st.lock().unwrap().gotos.len(), l.opened()), (1, 1));
+    // reset xóa cache.
+    chat.reset().await;
+    let before = st.lock().unwrap().evals;
+    chat.account(&l, &store).await.unwrap();
+    assert!(st.lock().unwrap().evals > before);
+    assert_eq!(l.opened(), 2);
+}
+
+#[tokio::test]
+async fn account_khong_thay_ten_khong_dong_phien() {
+    let chat = MessengerChat::new(cfg());
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    st.lock().unwrap().account_json = json!({"name": "", "avatar": ""}).to_string();
+    let l = FakeLauncher::new(&st);
+    assert_eq!(chat.account(&l, &store).await.unwrap_err(), Reason::SelectorBroken);
+    assert_eq!(st.lock().unwrap().closed, 0);
+    // Hết hạn đăng nhập thì báo đúng lý do.
+    let st2 = fake_state();
+    st2.lock().unwrap().login_form = true;
+    let l2 = FakeLauncher::new(&st2);
+    assert_eq!(MessengerChat::new(cfg()).account(&l2, &store).await.unwrap_err(), Reason::NotLoggedIn);
+}
+
+#[tokio::test]
+async fn op_messenger_account() {
+    let chat = MessengerChat::new(cfg());
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l = FakeLauncher::new(&st);
+    let r = chat_op("messenger.account", &json!({}), &store, &chat, &l).await.unwrap().unwrap();
+    assert_eq!(r, json!({"ok": true, "name": "Nguyễn Phúc", "avatar": "https://scontent.fsgn5-3.fna.fbcdn.net/v/a.jpg?x=1"}));
+    assert!(!r.to_string().contains(SECRET_A));
+    let bad = chat_op("messenger.account", &json!({}), &empty_store(), &MessengerChat::new(cfg()), &l).await.unwrap().unwrap();
+    assert_eq!(bad, json!({"ok": false, "name": "", "avatar": "", "reason": "not-logged-in"}));
 }

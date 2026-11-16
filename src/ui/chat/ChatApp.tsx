@@ -105,6 +105,9 @@ export function ChatApp(props: ChatAppProps) {
   const [accounts, setAccounts] = useState<ChatAccount[] | null>(null);
   const [convs, setConvs] = useState<ChatConversation[]>([]);
   const [convsLoaded, setConvsLoaded] = useState(false);
+  const [listNote, setListNote] = useState('');
+  const [unlockState, setUnlockState] = useState<'idle' | 'busy' | 'opened'>('idle');
+  const [unlockError, setUnlockError] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesLoaded, setMessagesLoaded] = useState(false);
@@ -148,6 +151,7 @@ export function ChatApp(props: ChatAppProps) {
       if (!live) return;
       setError('');
       setConvsLoaded(true);
+      setListNote(provider.listNotice?.() ?? '');
       setConvs(list);
       setActiveId(cur => (cur && list.some(c => c.id === cur) ? cur : list[0]?.id ?? null));
     }, e => { if (live) { setConvsLoaded(true); setError(e instanceof ChatError ? e.message : 'Không tải được danh sách hội thoại.'); } });
@@ -298,11 +302,30 @@ export function ChatApp(props: ChatAppProps) {
     );
   }
 
+  const unlockE2ee = (): void => {
+    if (!provider?.unlockE2ee) return;
+    setUnlockState('busy');
+    setUnlockError('');
+    provider.unlockE2ee().then(
+      () => setUnlockState('opened'),
+      e => { setUnlockState('idle'); setUnlockError(e instanceof ChatError ? e.message : 'Không mở được cửa sổ Chrome.'); },
+    );
+  };
+
   const selecting = selected.length > 0;
   return (
     <section className="op-chat" lang="vi" aria-label={name}>
       <div className="op-chat__list">
         {error && <p className="op-chat__error" role="alert">{error}</p>}
+        {listNote && <p className="op-chat__muted op-chat__pad" role="status">{listNote}</p>}
+        {listNote && provider?.unlockE2ee && (
+          <div className="op-chat__unlock op-chat__pad">
+            {unlockState === 'opened'
+              ? <p className="op-chat__muted" role="status">Đã mở cửa sổ Chrome — nhập PIN xong thì đóng cửa sổ rồi bấm Tải lại</p>
+              : <button type="button" className="op-chat__btn" disabled={unlockState === 'busy'} onClick={unlockE2ee}>Nhập mã PIN để mở khóa</button>}
+            {unlockError && <p className="op-chat__error" role="alert">{unlockError}</p>}
+          </div>
+        )}
         <ul className="op-chat__rows">
           {convs.length === 0 && !convsLoaded && !error && <li className="op-chat__muted op-chat__pad" role="status">Đang tải hội thoại…</li>}
           {convs.length === 0 && (convsLoaded || !!error) && <li className="op-chat__muted op-chat__pad">{provider?.folderEmptyText?.[folder] ?? `Không có hội thoại trong “${FOLDER_LABEL[folder] ?? 'mục này'}”.`}</li>}

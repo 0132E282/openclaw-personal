@@ -23,9 +23,11 @@ const MISSING_CORE_RESULTS: Record<string, unknown> = {
  [BACKEND_OPERATION_IDS.messengerCookiesSet]: {ok: false, reason: 'io-error'},
  [BACKEND_OPERATION_IDS.messengerCookiesClear]: {ok: false, reason: 'io-error'},
  [BACKEND_OPERATION_IDS.messengerStatus]: {state: 'no-cookies', reason: null},
+ [BACKEND_OPERATION_IDS.messengerAccount]: {ok: false, name: '', avatar: '', reason: 'launch-failed'},
  [BACKEND_OPERATION_IDS.messengerConversations]: {ok: false, reason: 'launch-failed', conversations: [], e2eeHidden: 0},
  [BACKEND_OPERATION_IDS.messengerMessages]: {ok: false, reason: 'launch-failed', messages: []},
  [BACKEND_OPERATION_IDS.messengerSend]: {ok: false, reason: 'launch-failed'},
+ [BACKEND_OPERATION_IDS.messengerE2eeUnlock]: loginUnavailable,
 };
 
 export function createRustHandlers(opts: {core: CoreProcess; fallback?: Record<string, Handler>}): Record<string, Handler> {

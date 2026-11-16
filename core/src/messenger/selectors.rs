@@ -9,6 +9,9 @@ use super::chat::Reason;
 
 pub const MESSAGES_URL: &str = "https://www.facebook.com/messages/";
 const THREAD_URL_PREFIX: &str = "https://www.facebook.com/messages/t/";
+const E2EE_THREAD_URL_PREFIX: &str = "https://www.facebook.com/messages/e2ee/t/";
+/// Tiền tố id hội thoại mã hóa đầu-cuối (giữ nguyên hợp đồng: id vẫn là chuỗi).
+pub const E2EE_ID_PREFIX: &str = "e2ee-";
 
 /// Ô soạn tin.
 pub const COMPOSER_SELECTOR: &str = r#"div[role="textbox"][contenteditable="true"]"#;
@@ -99,6 +102,78 @@ pub const MESSAGES_JS: &str = r#"(() => {
   return JSON.stringify({ready: true, loading, composer: !!document.querySelector('div[role="textbox"][contenteditable="true"]'), rows: out});
 })()"#;
 
+/// Nút tài khoản ở góc phải (đã đối chiếu DOM thật, tiếng Việt: `div[role="button"][aria-label="Tài khoản, trang cá nhân của bạn"]`
+/// chứa `svg > g > image` là ảnh đại diện của CHÍNH mình). Chọn theo nhãn đa ngôn ngữ + có ảnh bên trong.
+macro_rules! account_button_js {
+    () => {
+        r#"const btn = [...document.querySelectorAll('[role="button"][aria-label]')].find(x => /tài khoản|account|profile|trang cá nhân/i.test(x.getAttribute('aria-label') || '') && x.querySelector('image, img'));
+  const imgUrl = el => { const im = el && el.querySelector('image, img'); return im ? (im.getAttribute('xlink:href') || im.getAttribute('href') || im.getAttribute('src') || '') : ''; };
+  const card = () => document.querySelector('[role="dialog"] a[href="/me/"]');"#
+    };
+}
+
+/// Mở menu tài khoản (nếu chưa mở). Tên chỉ có trong menu: thẻ `[role="dialog"] a[href="/me/"]` (dòng đầu là tên mình).
+pub const ACCOUNT_OPEN_JS: &str = concat!(
+    "(() => {\n  ",
+    account_button_js!(),
+    r#"
+  if (card()) return JSON.stringify({found: true});
+  if (!btn) return JSON.stringify({found: false});
+  btn.click();
+  return JSON.stringify({found: true});
+})()"#
+);
+
+/// Đọc tên (dòng đầu thẻ `/me/` trong menu) và ảnh đại diện (nút tài khoản, hoặc ảnh trong thẻ `/me/`).
+pub const ACCOUNT_READ_JS: &str = concat!(
+    "(() => {\n  ",
+    account_button_js!(),
+    r#"
+  const c = card();
+  const name = c ? ((c.innerText || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || '') : '';
+  return JSON.stringify({name, avatar: imgUrl(btn), cardAvatar: imgUrl(c)});
+})()"#
+);
+
+/// Đóng menu tài khoản (bấm lại nút) để không để lại hộp thoại trên trang.
+pub const ACCOUNT_CLOSE_JS: &str = concat!(
+    "(() => {\n  ",
+    account_button_js!(),
+    r#"
+  if (card() && btn) btn.click();
+  return JSON.stringify({});
+})()"#
+);
+
+/// Tài khoản Facebook đang đăng nhập.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub name: String,
+    /// URL https ảnh đại diện; rỗng nếu không lấy được.
+    pub avatar: String,
+}
+
+impl AccountInfo {
+    pub fn to_json(&self) -> Value {
+        json!({"name": self.name, "avatar": self.avatar})
+    }
+}
+
+const MAX_ACCOUNT_NAME: usize = 80;
+
+/// Chuẩn hóa kết quả `ACCOUNT_READ_JS`: `Ok(None)` khi menu chưa có tên (đọc lại sau), `Err` khi sai dạng.
+/// Ảnh: ưu tiên ảnh ở nút tài khoản, rơi về ảnh trong thẻ `/me/`; cùng bộ lọc host như ảnh hội thoại.
+pub fn parse_account(raw: &str) -> Result<Option<AccountInfo>, Reason> {
+    let v: Value = serde_json::from_str(raw).map_err(|_| Reason::SelectorBroken)?;
+    let name = v.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    if name.is_empty() || name.chars().any(char::is_control) {
+        return Ok(None);
+    }
+    let get = |k: &str| avatar_url(v.get(k).and_then(Value::as_str).unwrap_or(""));
+    let avatar = Some(get("avatar")).filter(|a| !a.is_empty()).unwrap_or_else(|| get("cardAvatar"));
+    Ok(Some(AccountInfo { name: clip(name, MAX_ACCOUNT_NAME), avatar }))
+}
+
 /// Ô soạn đã rỗng chưa (xác nhận tin đã gửi đi).
 pub const COMPOSER_EMPTY_JS: &str = r#"(() => {
   const c = document.querySelector('div[role="textbox"][contenteditable="true"]');
@@ -106,13 +181,24 @@ pub const COMPOSER_EMPTY_JS: &str = r#"(() => {
 })()"#;
 
 /// Địa chỉ trang của một hội thoại; chỉ nhận id số.
+/// Chat mã hóa đầu-cuối mở ở `/messages/e2ee/t/<id>/`.
 pub fn thread_url(id: &str) -> Option<String> {
-    valid_conversation_id(id).then(|| format!("{THREAD_URL_PREFIX}{id}/"))
+    let (num, e2ee) = split_conversation_id(id)?;
+    Some(if e2ee { format!("{E2EE_THREAD_URL_PREFIX}{num}/") } else { format!("{THREAD_URL_PREFIX}{num}/") })
 }
 
-/// `^[0-9]{1,30}$`: id số của Facebook; chặn mọi chuỗi có thể chèn vào URL.
+/// Tách `(id số, là chat mã hóa)` từ id hội thoại `123` hoặc `e2ee-123`; `None` nếu sai dạng.
+pub fn split_conversation_id(id: &str) -> Option<(&str, bool)> {
+    let (num, e2ee) = match id.strip_prefix(E2EE_ID_PREFIX) {
+        Some(rest) => (rest, true),
+        None => (id, false),
+    };
+    ((1..=30).contains(&num.len()) && num.bytes().all(|b| b.is_ascii_digit())).then_some((num, e2ee))
+}
+
+/// `^(e2ee-)?[0-9]{1,30}$`: id số của Facebook, chat mã hóa thêm tiền tố `e2ee-`; chặn mọi chuỗi có thể chèn vào URL.
 pub fn valid_conversation_id(id: &str) -> bool {
-    (1..=30).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
+    split_conversation_id(id).is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,7 +277,7 @@ fn snippet_and_time(rest: &[String]) -> (String, String) {
 
 pub struct ParsedList {
     pub conversations: Vec<Conversation>,
-    /// Số hội thoại mã hóa đầu-cuối bị ẩn (không đọc được nếu chưa nhập mã PIN trên trình duyệt).
+    /// Giữ cho tương thích hợp đồng: chat mã hóa nay được liệt kê (id `e2ee-<id>`) nên luôn 0.
     pub e2ee_hidden: usize,
 }
 
@@ -222,13 +308,9 @@ pub fn parse_conversations(raw: &str) -> Result<ParsedList, Reason> {
     }
     let rows = v.get("rows").and_then(Value::as_array).ok_or(Reason::SelectorBroken)?;
     let mut out: Vec<Conversation> = Vec::new();
-    let mut hidden = 0;
     for row in rows {
         let Some((id, e2ee)) = row.get("href").and_then(Value::as_str).and_then(conversation_id_of_href) else { continue };
-        if e2ee {
-            hidden += 1;
-            continue;
-        }
+        let id = if e2ee { format!("{E2EE_ID_PREFIX}{id}") } else { id };
         if out.iter().any(|c| c.id == id) {
             continue;
         }
@@ -252,7 +334,7 @@ pub fn parse_conversations(raw: &str) -> Result<ParsedList, Reason> {
             break;
         }
     }
-    Ok(ParsedList { conversations: out, e2ee_hidden: hidden })
+    Ok(ParsedList { conversations: out, e2ee_hidden: 0 })
 }
 
 pub struct ParsedMessages {
@@ -321,7 +403,8 @@ pub fn classify(p: &Probe, thread: bool) -> Result<(), Reason> {
     if p.login_form || url.contains("/login") {
         return Err(Reason::NotLoggedIn);
     }
-    if p.pin || (thread && url.contains("/messages/e2ee")) {
+    // Chat mã hóa mở được ở `/messages/e2ee/t/<id>`; bị đẩy về `/messages/e2ee/` (không `t/`) tức là đang khóa chờ PIN.
+    if p.pin || (thread && url.contains("/messages/e2ee") && !url.contains("/messages/e2ee/t/")) {
         return Err(Reason::E2eeLocked);
     }
     Ok(())

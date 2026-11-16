@@ -17,6 +17,8 @@ const OP_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct ChromiumPageLauncher {
     /// Thư mục dữ liệu trình duyệt riêng (ví dụ `<state_dir>/messenger-browser`).
     pub profile_dir: PathBuf,
+    /// `true`: mở cửa sổ HIỆN để người dùng tự thao tác (nhập PIN khôi phục chat mã hóa).
+    pub visible: bool,
 }
 
 struct ChromiumChatPage {
@@ -48,7 +50,13 @@ impl ChatPage for ChromiumChatPage {
         bounded(self.page.goto(url)).await.map(|_| ())
     }
     async fn url(&mut self) -> Result<String, PageError> {
-        Ok(bounded(self.page.url()).await?.unwrap_or_default())
+        // Handler CDP kết thúc khi Chrome đã thoát (người dùng đóng cửa sổ).
+        if self.pump.is_finished() {
+            return Err(PageError::Failed);
+        }
+        // `page.url()` đọc thông tin target đã cache nên không lỗi khi Chrome đã đóng; evaluate thì có.
+        let r = bounded(self.page.evaluate("location.href")).await?;
+        Ok(r.into_value::<String>().unwrap_or_default())
     }
     async fn eval(&mut self, js: &str) -> Result<String, PageError> {
         let r = bounded(self.page.evaluate(js)).await?;
@@ -89,8 +97,11 @@ impl PageLauncher for ChromiumPageLauncher {
         for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
             let _ = std::fs::remove_file(self.profile_dir.join(f));
         }
-        let config = chromiumoxide::BrowserConfig::builder()
-            .chrome_executable(exe)
+        let mut builder = chromiumoxide::BrowserConfig::builder().chrome_executable(exe);
+        if self.visible {
+            builder = builder.with_head();
+        }
+        let config = builder
             .user_data_dir(&self.profile_dir)
             .window_size(1280, 900)
             .viewport(None)
@@ -105,6 +116,9 @@ impl PageLauncher for ChromiumPageLauncher {
             let page = browser.new_page("about:blank").await.ok()?;
             let params: Vec<CookieParam> = cookies.iter().map(cookie_param).collect();
             page.execute(SetCookiesParams::new(params)).await.ok()?;
+            if self.visible {
+                let _ = page.bring_to_front().await;
+            }
             Some(page)
         }
         .await;
