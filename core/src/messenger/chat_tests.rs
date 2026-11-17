@@ -264,6 +264,7 @@ fn classify_anh_xa_ly_do() {
     assert_eq!(classify(&base, false), Ok(()));
     assert_eq!(classify(&Probe { login_form: true, ..base.clone() }, false), Err(Reason::NotLoggedIn));
     assert_eq!(classify(&Probe { url: "https://www.facebook.com/login/?next=x".into(), ..base.clone() }, false), Err(Reason::NotLoggedIn));
+    assert_eq!(classify(&Probe { url: "https://www.facebook.com/index.php?next=https%3A%2F%2Fwww.facebook.com%2Fmessages%2F&deoia=1".into(), list: false, ..base.clone() }, false), Err(Reason::NotLoggedIn));
     assert_eq!(classify(&Probe { url: "https://www.facebook.com/checkpoint/1501/".into(), login_form: true, ..base.clone() }, false), Err(Reason::Checkpoint));
     assert_eq!(classify(&Probe { pin: true, ..base.clone() }, false), Err(Reason::E2eeLocked));
     let e2ee = Probe { url: "https://www.facebook.com/messages/e2ee/t/5/".into(), ..base };
@@ -652,4 +653,106 @@ async fn op_messenger_account() {
     assert!(!r.to_string().contains(SECRET_A));
     let bad = chat_op("messenger.account", &json!({}), &empty_store(), &MessengerChat::new(cfg()), &l).await.unwrap().unwrap();
     assert_eq!(bad, json!({"ok": false, "name": "", "avatar": "", "reason": "not-logged-in"}));
+}
+
+// ---------- kho SQLite ----------
+
+fn mem_store() -> super::store::MessengerStore {
+    super::store::MessengerStore::open_in_memory().unwrap()
+}
+
+fn chat_with(db: &super::store::MessengerStore, cfg: ChatConfig) -> MessengerChat {
+    let c = MessengerChat::new(cfg);
+    c.set_store(db.clone());
+    c
+}
+
+#[tokio::test]
+async fn sqlite_doc_thanh_cong_thi_luu_va_loi_thi_phuc_vu_tu_kho() {
+    let db = mem_store();
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l = FakeLauncher::new(&st);
+    let chat = chat_with(&db, ChatConfig { cache_ttl: Duration::ZERO, ..cfg() });
+    assert_eq!(chat.conversations(&l, &store, "all").await.unwrap().conversations.len(), 3);
+    assert_eq!(chat.messages(&l, &store, "111").await.unwrap().len(), 2);
+    assert_eq!(db.conversations("default").await.unwrap().0.len(), 3);
+    assert_eq!(db.messages("111").await.unwrap().0.len(), 2);
+
+    // Trang hỏng: vẫn trả dữ liệu đã lưu (kể cả lọc thư mục), không lỗi.
+    {
+        let mut s = st.lock().unwrap();
+        s.complete = false;
+        s.list = false;
+    }
+    assert_eq!(chat.conversations(&l, &store, "all").await.unwrap().conversations.len(), 3);
+    assert_eq!(chat.conversations(&l, &store, "unread").await.unwrap().conversations.len(), 1);
+    let m = chat.messages(&l, &store, "111").await.unwrap();
+    assert_eq!((m[0].text.as_str(), m[1].text.as_str(), m[1].from_me), ("hello", "chào", true));
+    // Hội thoại chưa lưu thì vẫn lỗi như trước.
+    assert_eq!(chat.messages(&l, &store, "222").await.err(), Some(Reason::Timeout));
+}
+
+#[tokio::test]
+async fn sqlite_phuc_vu_du_lieu_con_moi_khong_mo_chrome_va_het_han_van_bao_loi() {
+    let db = mem_store();
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l1 = FakeLauncher::new(&st);
+    let long = ChatConfig { cache_ttl: Duration::from_secs(60), ..cfg() };
+    let c1 = chat_with(&db, long);
+    c1.conversations(&l1, &store, "all").await.unwrap();
+    c1.messages(&l1, &store, "111").await.unwrap();
+    // "Khởi động lại": MessengerChat mới, cache bộ nhớ trống.
+    let chat2 = chat_with(&db, long);
+    let l2 = FakeLauncher::new(&st);
+    assert_eq!(chat2.conversations(&l2, &store, "all").await.unwrap().conversations.len(), 3);
+    assert_eq!(chat2.messages(&l2, &store, "111").await.unwrap().len(), 2);
+    assert_eq!(l2.opened(), 0);
+
+    // Hết hạn đăng nhập vẫn là lỗi dù có dữ liệu lưu.
+    let st3 = fake_state();
+    st3.lock().unwrap().login_form = true;
+    let chat3 = chat_with(&db, ChatConfig { cache_ttl: Duration::ZERO, ..cfg() });
+    assert_eq!(chat3.conversations(&FakeLauncher::new(&st3), &store, "all").await.err(), Some(Reason::NotLoggedIn));
+    assert_eq!(chat3.messages(&FakeLauncher::new(&st3), &store, "111").await.err(), Some(Reason::NotLoggedIn));
+}
+
+#[tokio::test]
+async fn sqlite_gui_tin_lam_du_lieu_luu_het_moi_va_logout_xoa_sach() {
+    let db = mem_store();
+    let store = store_with_cookies().await;
+    let st = fake_state();
+    let l = FakeLauncher::new(&st);
+    let chat = chat_with(&db, ChatConfig { cache_ttl: Duration::from_secs(60), ..cfg() });
+    chat.conversations(&l, &store, "all").await.unwrap();
+    chat.messages(&l, &store, "111").await.unwrap();
+    chat.send(&l, &store, "111", "hi").await.unwrap();
+    st.lock().unwrap().messages_json = json!({"ready": true, "rows": [{"text": "mới", "mine": true}]}).to_string();
+    assert_eq!(chat.messages(&l, &store, "111").await.unwrap()[0].text, "mới");
+
+    chat.clear_store().await;
+    assert!(db.conversations("default").await.is_none());
+    assert!(db.messages("111").await.is_none());
+}
+
+#[tokio::test]
+async fn sqlite_cat_gioi_han_va_khong_trung_id() {
+    use super::store::*;
+    let db = mem_store();
+    let convs: Vec<Conversation> = (0..MAX_CONVERSATIONS + 20)
+        .map(|i| Conversation { id: i.to_string(), title: format!("t{i}"), snippet: String::new(), time: String::new(), unread: i % 2 == 0, is_group: false, avatar: String::new() })
+        .collect();
+    db.put_conversations("default", convs, 2).await;
+    let (got, hidden, _) = db.conversations("default").await.unwrap();
+    assert_eq!((got.len(), hidden, got[0].id.as_str()), (MAX_CONVERSATIONS, 2, "0"));
+
+    let mk = |i: usize| Message { id: format!("m{i}"), from_me: i % 2 == 0, sender_name: String::new(), text: format!("x{i}"), time: String::new() };
+    db.put_messages("1", (0..MAX_MESSAGES + 50).map(mk).collect()).await;
+    let (got, _) = db.messages("1").await.unwrap();
+    assert_eq!((got.len(), got[0].text.as_str()), (MAX_MESSAGES, "x50"));
+    db.put_messages("1", vec![mk(1), mk(1), mk(2)]).await;
+    assert_eq!(db.messages("1").await.unwrap().0.len(), 2);
+    db.clear().await;
+    assert!(db.conversations("default").await.is_none());
 }

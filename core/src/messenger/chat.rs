@@ -13,6 +13,7 @@ use tokio::time::{sleep, timeout, Instant};
 use super::cookies::{CookieStore, StoredCookie};
 use super::login::LaunchError;
 use super::selectors::{self, AccountInfo, Conversation, Message, Probe};
+use super::store::MessengerStore;
 use super::DEFAULT_ACCOUNT;
 
 /// Lý do cố định, an toàn để hiện cho người dùng.
@@ -134,6 +135,9 @@ struct Inner {
     account: Option<(Instant, AccountInfo)>,
     sends: VecDeque<Instant>,
     reaper: bool,
+    /// Sau khi gửi tin: bản SQLite không còn được phục vụ như dữ liệu mới cho tới lần đọc thật kế tiếp.
+    stale_list: bool,
+    stale_msgs: std::collections::HashSet<String>,
 }
 
 impl Inner {
@@ -154,11 +158,52 @@ pub struct MessengerChat {
     /// Ngoài mutex chính để `status` không bị chặn bởi thao tác trình duyệt đang chạy.
     expired: Arc<StdMutex<Option<Reason>>>,
     cfg: ChatConfig,
+    /// Kho SQLite (gắn một lần khi biết thư mục trạng thái); `None` thì chỉ dùng cache bộ nhớ.
+    store: Arc<StdMutex<Option<MessengerStore>>>,
+}
+
+/// Lỗi tạm thời của trình duyệt: có dữ liệu đã lưu thì phục vụ dữ liệu đó thay vì báo lỗi.
+/// Hết hạn đăng nhập, chat mã hóa bị khóa và đầu vào sai vẫn báo lỗi.
+fn is_transient(r: Reason) -> bool {
+    matches!(r, Reason::Timeout | Reason::LaunchFailed | Reason::SelectorBroken | Reason::BrowserMissing)
 }
 
 impl MessengerChat {
     pub fn new(cfg: ChatConfig) -> Self {
-        Self { inner: Arc::new(Mutex::new(Inner::default())), expired: Arc::new(StdMutex::new(None)), cfg }
+        Self { inner: Arc::new(Mutex::new(Inner::default())), expired: Arc::new(StdMutex::new(None)), cfg, store: Arc::new(StdMutex::new(None)) }
+    }
+
+    pub fn set_store(&self, s: MessengerStore) {
+        *self.store.lock().unwrap() = Some(s);
+    }
+
+    /// Mở `<state_dir>/messenger.sqlite3` lần đầu (idempotent); lỗi mở thì chạy tiếp không có kho.
+    pub fn attach_store(&self, state_dir: &std::path::Path) {
+        let mut g = self.store.lock().unwrap();
+        if g.is_none() {
+            match MessengerStore::open(&state_dir.join("messenger.sqlite3")) {
+                Ok(s) => *g = Some(s),
+                Err(e) => eprintln!("[messenger] không mở được kho SQLite: {e}"),
+            }
+        }
+    }
+
+    fn store(&self) -> Option<MessengerStore> {
+        self.store.lock().unwrap().clone()
+    }
+
+    /// Xóa dữ liệu đã lưu (đăng xuất/đổi cookie).
+    pub async fn clear_store(&self) {
+        if let Some(s) = self.store() {
+            s.clear().await;
+        }
+        let mut g = self.inner.lock().await;
+        g.stale_list = false;
+        g.stale_msgs.clear();
+    }
+
+    async fn stored_conversations(&self, db: &Option<MessengerStore>) -> Option<(Vec<Conversation>, usize)> {
+        db.as_ref()?.conversations(DEFAULT_ACCOUNT).await.map(|(l, h, _)| (l, h))
     }
 
     fn expired(&self) -> Option<Reason> {
@@ -192,14 +237,34 @@ impl MessengerChat {
                 return Ok(filter_folder(list, folder, *hidden));
             }
         }
+        let db = self.store();
+        // Sau khi core khởi động lại cache bộ nhớ trống: danh sách còn mới trong SQLite thì dùng luôn, không mở Chrome.
+        if let (Some(d), false) = (&db, g.stale_list) {
+            if let Some((list, hidden, age)) = d.conversations(DEFAULT_ACCOUNT).await {
+                if Duration::from_secs(age.max(0) as u64) < self.cfg.cache_ttl {
+                    return Ok(filter_folder(&list, folder, hidden));
+                }
+            }
+        }
         let r = match timeout(self.cfg.op_timeout, self.fetch_conversations(&mut g, launcher, store)).await {
             Ok(r) => r,
             Err(_) => Err(Reason::Timeout),
         };
-        let r = self.settle(&mut g, r).await?;
+        let r = match self.settle(&mut g, r).await {
+            Ok(r) => r,
+            Err(e) if is_transient(e) => match self.stored_conversations(&db).await {
+                Some((list, hidden)) => return Ok(filter_folder(&list, folder, hidden)),
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        };
         // Không cache danh sách rỗng để lần sau đọc lại ngay thay vì giữ kết quả rỗng do trang chưa tải xong.
         if !r.conversations.is_empty() {
             g.convs = Some((Instant::now(), r.conversations.clone(), r.e2ee_hidden));
+            g.stale_list = false;
+            if let Some(d) = &db {
+                d.put_conversations(DEFAULT_ACCOUNT, r.conversations.clone(), r.e2ee_hidden).await;
+            }
         }
         Ok(filter_folder(&r.conversations, folder, r.e2ee_hidden))
     }
@@ -265,11 +330,33 @@ impl MessengerChat {
                 return Ok(list.clone());
             }
         }
+        let db = self.store();
+        if let (Some(d), false) = (&db, g.stale_msgs.contains(conversation_id)) {
+            if let Some((list, age)) = d.messages(conversation_id).await {
+                if Duration::from_secs(age.max(0) as u64) < self.cfg.cache_ttl {
+                    return Ok(list);
+                }
+            }
+        }
         let r = match timeout(self.cfg.op_timeout, self.fetch_messages(&mut g, launcher, store, conversation_id)).await {
             Ok(r) => r,
             Err(_) => Err(Reason::Timeout),
         };
-        let list = self.settle(&mut g, r).await?;
+        let list = match self.settle(&mut g, r).await {
+            Ok(l) => l,
+            Err(e) if is_transient(e) => match &db {
+                Some(d) => match d.messages(conversation_id).await {
+                    Some((list, _)) => return Ok(list),
+                    None => return Err(e),
+                },
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        };
+        g.stale_msgs.remove(conversation_id);
+        if let Some(d) = &db {
+            d.put_messages(conversation_id, list.clone()).await;
+        }
         if g.msgs.len() >= MAX_CACHED_THREADS {
             g.msgs.clear();
         }
@@ -299,6 +386,9 @@ impl MessengerChat {
         g.sends.push_back(Instant::now());
         g.msgs.remove(conversation_id);
         g.convs = None;
+        // Dữ liệu SQLite cũ vẫn dùng làm dự phòng nhưng không được coi là "mới" nữa.
+        g.stale_list = true;
+        g.stale_msgs.insert(conversation_id.to_string());
         Ok(())
     }
 

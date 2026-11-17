@@ -400,7 +400,9 @@ pub fn classify(p: &Probe, thread: bool) -> Result<(), Reason> {
     if url.contains("/checkpoint") || url.contains("/two_step_verification") || url.contains("/confirmemail") {
         return Err(Reason::Checkpoint);
     }
-    if p.login_form || url.contains("/login") {
+    // Cookie phiên hết hạn: Facebook chuyển `/messages/` sang trang "Tiếp tục với <tên>" ở `/index.php?next=...`
+    // (không có form đăng nhập, không có danh sách) -> phải là NotLoggedIn chứ không phải selector-broken.
+    if p.login_form || url.contains("/login") || (url.contains("/index.php") && url.contains("next=")) {
         return Err(Reason::NotLoggedIn);
     }
     // Chat mã hóa mở được ở `/messages/e2ee/t/<id>`; bị đẩy về `/messages/e2ee/` (không `t/`) tức là đang khóa chờ PIN.

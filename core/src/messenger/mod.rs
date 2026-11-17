@@ -10,6 +10,7 @@ pub mod cookies;
 pub mod e2ee;
 pub mod login;
 pub mod selectors;
+pub mod store;
 
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
@@ -127,6 +128,7 @@ async fn set_cookies(input: &Value, ctx: &Ctx) -> RpcResult {
         Ok(()) => {
             // Cookie mới: bỏ cờ hết hạn và phiên trình duyệt cũ.
             chat().reset().await;
+            chat().clear_store().await; // có thể là tài khoản khác: không giữ dữ liệu của tài khoản cũ
             json!({"ok": true})
         }
         Err(e) => json!({"ok": false, "reason": e.code()}),
@@ -142,6 +144,7 @@ async fn clear_cookies(input: &Value, ctx: &Ctx) -> RpcResult {
         Ok(()) => {
             // Đóng phiên và xóa luôn thư mục trình duyệt riêng để không còn phiên Facebook nào trên máy.
             chat().reset().await;
+            chat().clear_store().await;
             let _ = tokio::fs::remove_dir_all(profile_dir(ctx)).await;
             json!({"ok": true})
         }
@@ -150,6 +153,7 @@ async fn clear_cookies(input: &Value, ctx: &Ctx) -> RpcResult {
 }
 
 pub async fn handle(op: &str, input: Value, ctx: &Ctx) -> Option<RpcResult> {
+    chat().attach_store(&ctx.state_dir);
     let launcher = ChromiumPageLauncher { profile_dir: profile_dir(ctx), visible: false };
     // Đang mở Chrome hiện để nhập PIN: đọc/gửi không được mở Chrome ẩn (sẽ đóng cửa sổ của người dùng).
     let busy = e2ee::BusyLauncher;
@@ -182,7 +186,14 @@ pub async fn handle(op: &str, input: Value, ctx: &Ctx) -> Option<RpcResult> {
         }
         "messenger.e2ee.status" => Ok(e2ee_controller().status().to_json()),
         "messenger.e2ee.cancel" => Ok(e2ee_controller().cancel().await.to_json()),
-        "messenger.login.status" => Ok(controller().status().to_json()),
+        "messenger.login.status" => {
+            let st = controller().status();
+            // Đăng nhập xong: bỏ cờ "hết hạn" cũ và phiên ẩn cũ để lần đọc kế tiếp dùng cookie mới.
+            if st.phase == login::Phase::Succeeded {
+                chat().reset().await;
+            }
+            Ok(st.to_json())
+        }
         "messenger.login.cancel" => Ok(controller().cancel().await.to_json()),
         _ if op.starts_with("messenger.") => Err(RpcError::not_implemented(op)),
         _ => return None,
